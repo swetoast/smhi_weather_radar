@@ -67,7 +67,8 @@
         "range": {
           "0": "mdi:umbrella",
           "1": "mdi:timer-sand",
-          "30": "mdi:timer-sand-empty"
+          "30": "mdi:timer-sand-empty",
+          "60": "mdi:weather-cloudy-clock"
         }
       },
       "precipitation_next_hour": {
@@ -98,16 +99,29 @@
         }
       },
       "thunder_probability": {
-        "default": "mdi:weather-lightning"
+        "default": "mdi:weather-lightning",
+        "range": {
+          "0": "mdi:weather-cloudy",
+          "10": "mdi:weather-lightning",
+          "40": "mdi:weather-lightning-rainy"
+        }
       },
       "precipitation_next_24h": {
-        "default": "mdi:weather-pouring"
+        "default": "mdi:weather-rainy",
+        "range": {
+          "0": "mdi:weather-partly-cloudy",
+          "0.1": "mdi:weather-rainy",
+          "5": "mdi:weather-pouring"
+        }
       },
       "weather_warning": {
         "default": "mdi:alert",
         "state": {
           "none": "mdi:shield-check-outline",
-          "message": "mdi:information-outline"
+          "message": "mdi:information-outline",
+          "yellow": "mdi:alert-outline",
+          "orange": "mdi:alert",
+          "red": "mdi:alert-octagon"
         }
       }
     },
