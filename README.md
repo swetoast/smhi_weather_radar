@@ -1,8 +1,6 @@
 # SMHI Weather Radar
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories)
-[![Validate](https://github.com/swetoast/smhi_weather_radar/actions/workflows/validate.yml/badge.svg)](https://github.com/swetoast/smhi_weather_radar/actions/workflows/validate.yml)
-[![Tests](https://github.com/swetoast/smhi_weather_radar/actions/workflows/tests.yml/badge.svg)](https://github.com/swetoast/smhi_weather_radar/actions/workflows/tests.yml)
 
 Home Assistant integration for the SMHI Sweden composite weather radar. It shows the radar as two map images, reads precipitation at your location, and gives a short nowcast of when precipitation reaches you.
 
