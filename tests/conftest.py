@@ -91,6 +91,10 @@ def forecast_payload(codes: dict[int, int] | None = None) -> dict:
                 "data": {
                     "air_temperature": 0.5,
                     "precipitation_amount_mean": 0.4 if code else 0.0,
+                    "precipitation_amount_min": 0.1 if code else 0.0,
+                    "precipitation_amount_max": 0.9 if code else 0.0,
+                    "probability_of_precipitation": 90 if code else 5,
+                    "thunderstorm_probability": 30 if begin.hour == 18 and hour < 24 else 2,
                     "probability_of_frozen_precipitation": 90.0 if code in (5, 6, 7) else 0.0,
                     "precipitation_frozen_part": {5: 100, 6: 80, 7: 50}.get(code, -9),
                     "predominant_precipitation_type_at_surface": code,
@@ -98,6 +102,28 @@ def forecast_payload(codes: dict[int, int] | None = None) -> dict:
             }
         )
     return {"createdTime": "2026-10-24T15:05:00Z", "referenceTime": "2026-10-24T15:00:00Z", "timeSeries": series}
+
+
+def _area(level: str, ring: list[list[float]], name: str) -> dict:
+    return {
+        "approximateStart": "2026-10-24T12:00:00Z",
+        "approximateEnd": "2026-10-25T06:00:00Z",
+        "areaName": {"sv": name},
+        "warningLevel": {"code": level},
+        "eventDescription": {"sv": "Mycket regn", "en": "Heavy rain", "code": "RAIN"},
+        "area": {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]}},
+    }
+
+
+def warnings_payload() -> list:
+    """IBW feed: yellow rain over home, orange thunder near Stockholm, wind over home."""
+    home = [[12.0, 57.0], [14.0, 57.0], [14.0, 58.5], [12.0, 58.5], [12.0, 57.0]]
+    stockholm = [[17.5, 59.0], [18.5, 59.0], [18.5, 59.6], [17.5, 59.6], [17.5, 59.0]]
+    return [
+        {"id": 1, "event": {"code": "RAIN"}, "warningAreas": [_area("YELLOW", home, "V\u00e4stra G\u00f6talands l\u00e4n")]},
+        {"id": 2, "event": {"code": "THUNDER"}, "warningAreas": [_area("ORANGE", stockholm, "Stockholms l\u00e4n")]},
+        {"id": 3, "event": {"code": "WIND"}, "warningAreas": [_area("RED", home, "V\u00e4stra G\u00f6talands l\u00e4n")]},
+    ]
 
 
 @pytest.fixture(autouse=True)
@@ -111,12 +137,13 @@ def smhi_api(hass, aioclient_mock, freezer):
 
     The frame 20 minutes before the newest is missing (404) on purpose.
     """
-    from custom_components.smhi_radar.const import API_URL, FORECAST_URL
+    from custom_components.smhi_radar.const import API_URL, FORECAST_URL, WARNINGS_URL
 
     freezer.move_to(NOW)
     hass.config.latitude, hass.config.longitude = HOME
     aioclient_mock.get(API_URL, json=metadata())
     aioclient_mock.get(FORECAST_URL.format(lat=HOME[0], lon=HOME[1]), json=forecast_payload())
+    aioclient_mock.get(WARNINGS_URL, json=warnings_payload())
     for valid in frame_times():
         url = frame_url(f"radar_{valid:%y%m%d%H%M}", valid)
         if valid == NEWEST - timedelta(minutes=20):

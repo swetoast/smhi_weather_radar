@@ -1,7 +1,9 @@
-"""Precipitation type from the SMHI snow1g point forecast.
+"""Precipitation context from the SMHI snow1g point forecast.
 
 Radar shows whether and how hard it is precipitating, but not whether it
-is rain or snow. The forecast fills that gap. Only precipitation fields are
+is rain or snow, and it can only look about an hour ahead. The forecast
+fills both gaps: the precipitation type, thunderstorm probability, and
+precipitation beyond the radar horizon. Only precipitation fields are
 read; nothing from here is drawn on the map.
 """
 
@@ -15,6 +17,9 @@ from .const import PRECIPITATION_TYPES, TYPE_NONE
 from .exceptions import SmhiRadarDataError
 
 _MISSING = -9  # snow1g value for "not defined" (for example no precipitation)
+LIKELY_PROBABILITY = 50  # percent; a step counts as wet from here
+THUNDER_HOURS = 6
+OUTLOOK_HOURS = 24
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +31,32 @@ class PrecipitationStep:
     type_code: int | None
     frozen_part: int | None
     probability_frozen: float | None
+    thunder: float | None = None  # percent
+    probability: float | None = None  # percent chance of at least 0.1 mm
+    amount: float | None = None  # mm in the step, ensemble mean
+    amount_min: float | None = None
+    amount_max: float | None = None
+
+    @property
+    def likely_wet(self) -> bool:
+        """Return True when precipitation is likely in this step."""
+        return (self.probability or 0) >= LIKELY_PROBABILITY and (self.amount or 0) > 0
+
+
+@dataclass(frozen=True, slots=True)
+class Outlook:
+    """What the forecast says beyond the radar."""
+
+    thunder: float | None = None
+    thunder_max: float | None = None
+    thunder_max_at: datetime | None = None
+    amount: float | None = None
+    amount_min: float | None = None
+    amount_max: float | None = None
+    probability_max: float | None = None
+    arrival: datetime | None = None
+    arrival_probability: float | None = None
+    arrival_amount: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +107,11 @@ def parse_forecast(payload: Any) -> list[PrecipitationStep]:
                 type_code=None if type_code is None else int(type_code),
                 frozen_part=None if frozen is None else round(frozen),
                 probability_frozen=_number(data, "probability_of_frozen_precipitation"),
+                thunder=_number(data, "thunderstorm_probability"),
+                probability=_number(data, "probability_of_precipitation"),
+                amount=_number(data, "precipitation_amount_mean"),
+                amount_min=_number(data, "precipitation_amount_min"),
+                amount_max=_number(data, "precipitation_amount_max"),
             )
         )
     if not steps:
@@ -127,3 +163,51 @@ def expected_type(
     if minutes is None:
         return None
     return _type_name(_step_at(steps, now + timedelta(minutes=minutes)))
+
+
+def _overlap(step: PrecipitationStep, start: datetime, end: datetime) -> float:
+    """Return the share of the step inside [start, end)."""
+    length = (step.end - step.start).total_seconds()
+    inside = (min(step.end, end) - max(step.start, start)).total_seconds()
+    return max(0.0, inside) / length if length > 0 else 0.0
+
+
+def outlook(steps: list[PrecipitationStep], now: datetime, after: datetime | None) -> Outlook:
+    """Return thunder risk, the next 24 hours and the first likely precipitation.
+
+    after is where the search for precipitation starts: the end of the radar
+    nowcast, or now when the radar cannot tell. None skips the search
+    (the radar already expects precipitation).
+    """
+    if not steps:
+        return Outlook()
+    current = _step_at(steps, now)
+    thunder_end = now + timedelta(hours=THUNDER_HOURS)
+    thunder = [s for s in steps if s.thunder is not None and _overlap(s, now, thunder_end) > 0]
+    peak = max(thunder, key=lambda s: s.thunder, default=None)
+
+    end = now + timedelta(hours=OUTLOOK_HOURS)
+    window = [(s, _overlap(s, now, end)) for s in steps]
+    window = [(s, share) for s, share in window if share > 0]
+
+    def total(field: str) -> float | None:
+        values = [(getattr(s, field), share) for s, share in window]
+        if not values or any(value is None for value, _ in values):
+            return None
+        return round(sum(value * share for value, share in values), 1)
+
+    arrival_step = None
+    if after is not None:
+        arrival_step = next((s for s in steps if s.end > after and s.start < end and s.likely_wet), None)
+    return Outlook(
+        thunder=current.thunder if current else None,
+        thunder_max=peak.thunder if peak else None,
+        thunder_max_at=max(peak.start, now) if peak else None,
+        amount=total("amount"),
+        amount_min=total("amount_min"),
+        amount_max=total("amount_max"),
+        probability_max=max((s.probability for s, _ in window if s.probability is not None), default=None),
+        arrival=max(arrival_step.start, after) if arrival_step and after else None,
+        arrival_probability=arrival_step.probability if arrival_step else None,
+        arrival_amount=arrival_step.amount if arrival_step else None,
+    )

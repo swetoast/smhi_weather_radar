@@ -46,6 +46,9 @@ PERSON_RENDER_COOLDOWN_ANIMATED = 300
 # Precipitation type from the snow1g point forecast (sensors only).
 FORECAST_REFRESH_MINUTES = 30
 FORECAST_MAX_AGE_HOURS = 3
+WARNINGS_URL = "https://opendata-download-warnings.smhi.se/ibww/api/version/1/warning.json"
+WARNINGS_REFRESH_MINUTES = 10
+WARNINGS_MAX_AGE_HOURS = 2
 # WMO code table 4.201, used by snow1g predominant_precipitation_type_at_surface.
 PRECIPITATION_TYPES = {
     1: "rain",

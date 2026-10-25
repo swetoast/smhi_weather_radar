@@ -16,7 +16,7 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_time_changed,
 )
 
-from custom_components.smhi_radar.const import API_URL, DOMAIN
+from custom_components.smhi_radar.const import API_URL, DOMAIN, WARNINGS_URL
 
 PREFIX = "smhi_weather_radar"
 
@@ -50,6 +50,12 @@ async def test_setup_history_and_sensors(hass: HomeAssistant, smhi_api) -> None:
     assert state(hass, "sensor.precipitation_type") == "none"  # dry at home
     expected = hass.states.get(f"sensor.{PREFIX}_precipitation_expected_in")
     assert expected.attributes["expected_type"] in ("rain_and_snow", "snow")
+    assert expected.attributes["source"] == "radar"
+    assert state(hass, "sensor.thunder_probability") == "2"
+    assert float(state(hass, "sensor.precipitation_next_24_hours")) > 0
+    warning = hass.states.get(f"sensor.{PREFIX}_weather_warning")
+    assert warning.state == "yellow"
+    assert [w["event"] for w in warning.attributes["warnings"]] == ["rain"]
 
     for entity in ("image.weather_radar", "image.local_weather_radar"):
         image = await async_get_image(hass, f"image.{PREFIX}_{entity.split('.')[1]}")
@@ -75,6 +81,7 @@ async def test_outage_keeps_last_frame(hass: HomeAssistant, smhi_api, freezer) -
     await _setup(hass)
     smhi_api.clear_requests()
     smhi_api.get(API_URL, status=500)
+    smhi_api.get(WARNINGS_URL, status=500)
 
     freezer.tick(timedelta(minutes=20))
     async_fire_time_changed(hass)
@@ -175,7 +182,7 @@ async def test_custom_location_validation(hass: HomeAssistant, smhi_api) -> None
 
 
 async def test_forecast_outage_does_not_affect_radar(hass: HomeAssistant, smhi_api) -> None:
-    """Without the forecast the radar works and the type is simply unknown when wet."""
+    """Without forecast and warnings the radar works; those sensors are just unknown."""
     from custom_components.smhi_radar.const import FORECAST_URL
 
     smhi_api.clear_requests()
@@ -184,6 +191,7 @@ async def test_forecast_outage_does_not_affect_radar(hass: HomeAssistant, smhi_a
 
     smhi_api.get(API_URL, json=metadata())
     smhi_api.get(FORECAST_URL.format(lat=HOME[0], lon=HOME[1]), status=503)
+    smhi_api.get(WARNINGS_URL, status=503)
     for valid in frame_times():
         smhi_api.get(frame_url(f"radar_{valid:%y%m%d%H%M}", valid), content=cell_frame(valid))
     await _setup(hass, nearby_radius=25)
@@ -191,3 +199,5 @@ async def test_forecast_outage_does_not_affect_radar(hass: HomeAssistant, smhi_a
     assert state(hass, "binary_sensor.precipitation_nearby") == "on"
     assert state(hass, "sensor.precipitation_type") == "unknown"
     assert state(hass, "sensor.precipitation_intensity") == "0.0"
+    assert state(hass, "sensor.weather_warning") == "unknown"
+    assert state(hass, "sensor.thunder_probability") == "unknown"

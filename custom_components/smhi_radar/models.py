@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .analysis import NearbyRain, PointReading
-from .forecast import PrecipitationType
+from .forecast import Outlook, PrecipitationType
+from .ibw import Warning
 from .nowcast import Nowcast
 
 
@@ -46,3 +47,5 @@ class RadarData:
     frame_count: int
     precipitation_type: PrecipitationType
     expected_type: str | None
+    outlook: Outlook
+    warnings: tuple[Warning, ...] | None  # None until the feed has been read

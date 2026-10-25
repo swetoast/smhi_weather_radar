@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import math
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -14,8 +15,10 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import (
+    PERCENTAGE,
     EntityCategory,
     UnitOfLength,
+    UnitOfPrecipitationDepth,
     UnitOfTime,
     UnitOfVolumetricFlux,
 )
@@ -29,6 +32,7 @@ from .analysis import COMPASS
 from .const import PRECIPITATION_TYPES, TYPE_NONE
 from .coordinator import SmhiRadarCoordinator
 from .entity import SmhiRadarEntity
+from .ibw import LEVELS as WARNING_LEVELS, highest_level
 from .models import RadarData
 
 PARALLEL_UPDATES = 0
@@ -40,12 +44,36 @@ def _round(value: float | None, digits: int = 2) -> float | None:
     return None if value is None else round(value, digits)
 
 
+def _arrival(data: RadarData) -> tuple[datetime | None, str | None]:
+    """Radar first; the forecast once the radar sees nothing within its hour."""
+    if data.analysis.nowcast.arrival is not None:
+        return data.analysis.nowcast.arrival, "radar"
+    if data.outlook.arrival is not None:
+        return data.outlook.arrival, "forecast"
+    return None, None
+
+
+def _minutes_until(data: RadarData) -> int | None:
+    arrival, _ = _arrival(data)
+    if arrival is None:
+        return None
+    return max(0, math.ceil((arrival - dt_util.utcnow()).total_seconds() / 60))
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
 def _nowcast_attributes(data: RadarData) -> dict[str, Any]:
     nowcast = data.analysis.nowcast
-    arrival = nowcast.arrival
+    arrival, source = _arrival(data)
+    forecast = source == "forecast"
     return {
         "status": nowcast.status,
-        "arrival": arrival.isoformat() if arrival else None,
+        "source": source,
+        "arrival": _iso(arrival),
+        "forecast_probability": data.outlook.arrival_probability if forecast else None,
+        "forecast_amount": data.outlook.arrival_amount if forecast else None,
         "radar_time": nowcast.valid.isoformat() if nowcast.valid else None,
         "motion_pairs": nowcast.pairs_used,
         "motion_speed_kmh": nowcast.speed_kmh,
@@ -56,14 +84,33 @@ def _nowcast_attributes(data: RadarData) -> dict[str, Any]:
     }
 
 
+def _warning_attributes(data: RadarData, language: str) -> dict[str, Any]:
+    lang = "sv" if language.startswith("sv") else "en"
+    return {
+        "warnings": [
+            {
+                "event": warning.event,
+                "level": warning.level,
+                "description": warning.text.get(lang) or warning.text.get("sv"),
+                "area": warning.area,
+                "start": _iso(warning.start),
+                "end": _iso(warning.end),
+            }
+            for warning in data.warnings or ()
+        ]
+    }
+
+
 @dataclass(frozen=True, kw_only=True)
 class SmhiRadarSensorDescription(SensorEntityDescription):
     """Describes an SMHI radar sensor."""
 
     value_fn: Callable[[RadarData], float | int | str | datetime | None]
-    attributes_fn: Callable[[RadarData], dict[str, Any]] | None = None
+    attributes_fn: Callable[..., dict[str, Any]] | None = None
     # Recomputed every minute between radar frames (countdowns).
     live: bool = False
+    # attributes_fn takes the Home Assistant language as a second argument.
+    language_attributes: bool = False
 
 
 SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
@@ -134,7 +181,7 @@ SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
         translation_key="rain_expected_in",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.MINUTES,
-        value_fn=lambda data: data.analysis.nowcast.minutes_until(dt_util.utcnow()),
+        value_fn=_minutes_until,
         attributes_fn=_nowcast_attributes,
         live=True,
     ),
@@ -151,6 +198,40 @@ SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
             else None
         ),
         attributes_fn=lambda data: {"status": data.analysis.nowcast.status},
+    ),
+    SmhiRadarSensorDescription(
+        key="thunder_probability",
+        translation_key="thunder_probability",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: None if data.outlook.thunder is None else round(data.outlook.thunder),
+        attributes_fn=lambda data: {
+            "max_next_6h": data.outlook.thunder_max,
+            "max_next_6h_at": _iso(data.outlook.thunder_max_at),
+        },
+    ),
+    SmhiRadarSensorDescription(
+        key="precipitation_next_24h",
+        translation_key="precipitation_next_24h",
+        device_class=SensorDeviceClass.PRECIPITATION,
+        native_unit_of_measurement=UnitOfPrecipitationDepth.MILLIMETERS,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=lambda data: data.outlook.amount,
+        attributes_fn=lambda data: {
+            "min": data.outlook.amount_min,
+            "max": data.outlook.amount_max,
+            "max_probability": data.outlook.probability_max,
+        },
+    ),
+    SmhiRadarSensorDescription(
+        key="weather_warning",
+        translation_key="weather_warning",
+        device_class=SensorDeviceClass.ENUM,
+        options=list(WARNING_LEVELS),
+        value_fn=lambda data: None if data.warnings is None else highest_level(list(data.warnings)),
+        attributes_fn=_warning_attributes,
+        language_attributes=True,
     ),
 )
 
@@ -198,6 +279,9 @@ class SmhiRadarSensor(SmhiRadarEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return extra attributes."""
-        if self.entity_description.attributes_fn is None:
+        description = self.entity_description
+        if description.attributes_fn is None:
             return None
-        return self.entity_description.attributes_fn(self.coordinator.data)
+        if description.language_attributes:
+            return description.attributes_fn(self.coordinator.data, self.hass.config.language)
+        return description.attributes_fn(self.coordinator.data)

@@ -119,6 +119,22 @@
           "drizzle": "Duggregn",
           "freezing_drizzle": "Underkylt duggregn"
         }
+      },
+      "thunder_probability": {
+        "name": "Åsksannolikhet"
+      },
+      "precipitation_next_24h": {
+        "name": "Nederbörd närmaste dygnet"
+      },
+      "weather_warning": {
+        "name": "Vädervarning",
+        "state": {
+          "none": "Ingen",
+          "message": "Meddelande",
+          "yellow": "Gul",
+          "orange": "Orange",
+          "red": "Röd"
+        }
       }
     },
     "binary_sensor": {

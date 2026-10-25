@@ -96,6 +96,19 @@
           "graupel": "mdi:weather-hail",
           "hail": "mdi:weather-hail"
         }
+      },
+      "thunder_probability": {
+        "default": "mdi:weather-lightning"
+      },
+      "precipitation_next_24h": {
+        "default": "mdi:weather-pouring"
+      },
+      "weather_warning": {
+        "default": "mdi:alert",
+        "state": {
+          "none": "mdi:shield-check-outline",
+          "message": "mdi:information-outline"
+        }
       }
     },
     "binary_sensor": {

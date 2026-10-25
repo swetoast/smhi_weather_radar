@@ -119,6 +119,22 @@
           "drizzle": "Drizzle",
           "freezing_drizzle": "Freezing drizzle"
         }
+      },
+      "thunder_probability": {
+        "name": "Thunder probability"
+      },
+      "precipitation_next_24h": {
+        "name": "Precipitation next 24 hours"
+      },
+      "weather_warning": {
+        "name": "Weather warning",
+        "state": {
+          "none": "None",
+          "message": "Message",
+          "yellow": "Yellow",
+          "orange": "Orange",
+          "red": "Red"
+        }
       }
     },
     "binary_sensor": {

@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import ATTR_LATITUDE, ATTR_LONGITUDE, CONF_LATITUDE, CONF_LONGITUDE
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
@@ -36,10 +36,14 @@ from .const import (
     HISTORY_MINUTES,
     PERSON_RENDER_COOLDOWN,
     PERSON_RENDER_COOLDOWN_ANIMATED,
+    WARNINGS_MAX_AGE_HOURS,
+    WARNINGS_REFRESH_MINUTES,
 )
 from .exceptions import SmhiRadarError
-from .forecast import PrecipitationStep, PrecipitationType, classify, expected_type, parse_forecast
+from .forecast import PrecipitationStep, classify, expected_type, outlook, parse_forecast
+from .ibw import Warning, for_location, parse_warnings
 from .models import Analysis, RadarData, RadarMetadata
+from .nowcast import LEAD_MAX
 from .pipeline import Settings, StoredFrame, analyse, decode, render
 from .render import Marker
 
@@ -49,6 +53,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 BACKFILL_PARALLEL = 4
+NOWCAST_CONFIDENT = ("ok", "no_rain")
 BACKFILL_TIMEOUT = 25
 
 
@@ -79,6 +84,8 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
         self._forecast: list[PrecipitationStep] = []
         self._forecast_fetched: datetime | None = None
         self._forecast_location: tuple[float, float] | None = None
+        self._warnings: list[Warning] = []
+        self._warnings_fetched: datetime | None = None
         self._render_lock = asyncio.Lock()
         self._person_debouncer = Debouncer(
             hass,
@@ -199,6 +206,7 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
         self.last_error = None
         self.failed_update_count = 0
         await self._async_refresh_forecast(settings.latitude, settings.longitude)
+        await self._async_refresh_warnings()
 
         current = self.data
         markers = self._current_markers()
@@ -208,16 +216,15 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
             and (current.latitude, current.longitude) == (settings.latitude, settings.longitude)
             and markers == self._markers
         ):
-            precipitation_type, expected = self._precipitation_type(current.analysis)
-            if (precipitation_type, expected) == (current.precipitation_type, current.expected_type):
+            context = self._context(current.analysis, settings.latitude, settings.longitude)
+            if all(getattr(current, key) == value for key, value in context.items()):
                 return current
-            return replace(current, precipitation_type=precipitation_type, expected_type=expected)
+            return replace(current, **context)
 
         async with self._render_lock:
             frames = self._history()
             analysis = await self.hass.async_add_executor_job(analyse, frames, settings)
             national, local = await self._async_render(markers)
-        precipitation_type, expected = self._precipitation_type(analysis)
         return RadarData(
             metadata=metadata,
             image=frames[-1].png,
@@ -228,12 +235,11 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
             latitude=settings.latitude,
             longitude=settings.longitude,
             frame_count=len(frames),
-            precipitation_type=precipitation_type,
-            expected_type=expected,
+            **self._context(analysis, settings.latitude, settings.longitude),
         )
 
     # ------------------------------------------------------------------
-    # Precipitation type (snow1g forecast, sensors only)
+    # Forecast and warnings (sensors only)
 
     async def _async_refresh_forecast(self, latitude: float, longitude: float) -> None:
         """Fetch the point forecast when due; failures keep the last one."""
@@ -255,8 +261,22 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
         self._forecast_fetched = now
         self._forecast_location = (latitude, longitude)
 
-    def _precipitation_type(self, analysis: Analysis) -> tuple[PrecipitationType, str | None]:
-        """Combine radar (is it wet) with the forecast (what kind)."""
+    async def _async_refresh_warnings(self) -> None:
+        """Fetch the warnings feed when due; failures keep the last one."""
+        now = dt_util.utcnow()
+        if self._warnings_fetched and now - self._warnings_fetched < timedelta(
+            minutes=WARNINGS_REFRESH_MINUTES
+        ):
+            return
+        try:
+            self._warnings = parse_warnings(await self.client.async_get_warnings())
+        except SmhiRadarError as err:
+            _LOGGER.debug("SMHI warnings not updated: %s", err)
+            return
+        self._warnings_fetched = now
+
+    def _context(self, analysis: Analysis, latitude: float, longitude: float) -> dict[str, Any]:
+        """Combine radar (is it wet, nowcast) with forecast and warnings."""
         now = dt_util.utcnow()
         steps = self._forecast
         if self._forecast_fetched is None or now - self._forecast_fetched > timedelta(
@@ -265,14 +285,31 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
             steps = []
         intensity = analysis.reading.intensity
         nearby = analysis.nearby.raining
-        if intensity is None and nearby is None:
-            wet = None
+        wet = None if intensity is None and nearby is None else bool(intensity) or bool(nearby)
+
+        nowcast = analysis.nowcast
+        if nowcast.arrival is not None:
+            after = None  # the radar already expects precipitation
+        elif nowcast.status in NOWCAST_CONFIDENT and nowcast.valid is not None:
+            # Radar sees nothing arriving within its horizon; look beyond it.
+            after = max(now, nowcast.valid + timedelta(minutes=LEAD_MAX))
         else:
-            wet = bool(intensity) or bool(nearby)
-        return (
-            classify(steps, now, wet),
-            expected_type(steps, now, analysis.nowcast.minutes_until(now)),
-        )
+            after = now
+        future = outlook(steps, now, after)
+        arrival = nowcast.arrival or future.arrival
+        minutes = None if arrival is None else max(0, round((arrival - now).total_seconds() / 60))
+
+        warnings = None
+        if self._warnings_fetched and now - self._warnings_fetched <= timedelta(
+            hours=WARNINGS_MAX_AGE_HOURS
+        ):
+            warnings = tuple(for_location(self._warnings, latitude, longitude, now))
+        return {
+            "precipitation_type": classify(steps, now, wet),
+            "expected_type": expected_type(steps, now, minutes),
+            "outlook": future,
+            "warnings": warnings,
+        }
 
     def _history(self) -> list[StoredFrame]:
         return [self._frames[valid] for valid in sorted(self._frames)]

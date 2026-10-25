@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from custom_components.smhi_radar.exceptions import SmhiRadarDataError
-from custom_components.smhi_radar.forecast import classify, expected_type, parse_forecast
+from custom_components.smhi_radar.forecast import classify, expected_type, outlook, parse_forecast
 
 from .conftest import forecast_payload
 
@@ -56,3 +56,47 @@ def test_expected_type_follows_eta() -> None:
     assert expected_type(steps, NOW, 50) == "snow"
     assert expected_type(steps, NOW, None) is None
     assert expected_type(steps, NOW + timedelta(days=5), 0) is None
+
+
+def test_outlook_thunder_amounts_and_arrival_beyond_radar() -> None:
+    """Thunder risk, 24 h totals (partial steps prorated) and the first likely step."""
+    steps = parse_forecast(forecast_payload())
+    future = outlook(steps, NOW, after=NOW + timedelta(minutes=60))
+    assert future.thunder == 2
+    assert future.thunder_max == 30
+    assert future.thunder_max_at == datetime(2026, 10, 24, 18, tzinfo=UTC)
+    # Wet steps start 15, 16 and 17 UTC; from 15:20 two thirds of the first counts.
+    assert future.amount == round(0.4 * (40 / 60) + 0.4 + 0.4, 1)
+    assert future.probability_max == 90
+    # The radar looked to 16:20; the 16:00 step is still wet, so precipitation from 16:20.
+    assert future.arrival == NOW + timedelta(minutes=60)
+    assert future.arrival_probability == 90
+
+    after_rain = outlook(steps, NOW, after=datetime(2026, 10, 24, 18, tzinfo=UTC))
+    assert after_rain.arrival is None  # dry for the rest of the day
+    assert outlook(steps, NOW, after=None).arrival is None  # radar already expects it
+    assert outlook([], NOW, after=NOW).amount is None
+
+
+def test_expected_in_hands_over_to_forecast(freezer) -> None:
+    """With no radar arrival the sensor counts down to the forecast step instead."""
+    from types import SimpleNamespace
+
+    from custom_components.smhi_radar.forecast import Outlook
+    from custom_components.smhi_radar.nowcast import Nowcast
+    from custom_components.smhi_radar.sensor import _minutes_until, _nowcast_attributes
+
+    freezer.move_to(NOW)
+    later = NOW + timedelta(hours=3)
+    data = SimpleNamespace(
+        analysis=SimpleNamespace(nowcast=Nowcast("no_rain", valid=NOW)),
+        outlook=Outlook(arrival=later, arrival_probability=80, arrival_amount=1.2),
+        expected_type="rain",
+    )
+    assert _minutes_until(data) == 180
+    attributes = _nowcast_attributes(data)
+    assert (attributes["source"], attributes["forecast_probability"]) == ("forecast", 80)
+
+    data.analysis.nowcast = Nowcast("ok", valid=NOW, expected_in=12)
+    assert _minutes_until(data) == 12
+    assert _nowcast_attributes(data)["source"] == "radar"
