@@ -46,7 +46,7 @@ def _round(value: float | None, digits: int = 2) -> float | None:
 
 def _arrival(data: RadarData) -> tuple[datetime | None, str | None]:
     """Radar first; the forecast once the radar sees nothing within its hour."""
-    if data.analysis.nowcast.arrival is not None:
+    if data.measured and data.analysis.nowcast.arrival is not None:
         return data.analysis.nowcast.arrival, "radar"
     if data.outlook.arrival is not None:
         return data.outlook.arrival, "forecast"
@@ -69,7 +69,7 @@ def _nowcast_attributes(data: RadarData) -> dict[str, Any]:
     arrival, source = _arrival(data)
     forecast = source == "forecast"
     return {
-        "status": nowcast.status,
+        "status": nowcast.status if data.measured else "no_coverage",
         "source": source,
         "arrival": _iso(arrival),
         "forecast_probability": data.outlook.arrival_probability if forecast else None,
@@ -109,6 +109,8 @@ class SmhiRadarSensorDescription(SensorEntityDescription):
     attributes_fn: Callable[..., dict[str, Any]] | None = None
     # Recomputed every minute between radar frames (countdowns).
     live: bool = False
+    # Reads the radar at the location: unknown while no working radar covers it.
+    radar_reading: bool = False
     # attributes_fn takes the Home Assistant language as a second argument.
     language_attributes: bool = False
 
@@ -116,6 +118,7 @@ class SmhiRadarSensorDescription(SensorEntityDescription):
 SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
     SmhiRadarSensorDescription(
         key="precipitation_intensity",
+        radar_reading=True,
         translation_key="precipitation_intensity",
         device_class=SensorDeviceClass.PRECIPITATION_INTENSITY,
         native_unit_of_measurement=UnitOfVolumetricFlux.MILLIMETERS_PER_HOUR,
@@ -125,6 +128,7 @@ SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
     ),
     SmhiRadarSensorDescription(
         key="reflectivity",
+        radar_reading=True,
         translation_key="reflectivity",
         native_unit_of_measurement="dBZ",
         state_class=SensorStateClass.MEASUREMENT,
@@ -141,6 +145,7 @@ SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
     ),
     SmhiRadarSensorDescription(
         key="nearby_max_intensity",
+        radar_reading=True,
         translation_key="nearby_max_intensity",
         device_class=SensorDeviceClass.PRECIPITATION_INTENSITY,
         native_unit_of_measurement=UnitOfVolumetricFlux.MILLIMETERS_PER_HOUR,
@@ -150,6 +155,7 @@ SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
     ),
     SmhiRadarSensorDescription(
         key="nearest_precipitation_distance",
+        radar_reading=True,
         translation_key="nearest_precipitation_distance",
         device_class=SensorDeviceClass.DISTANCE,
         native_unit_of_measurement=UnitOfLength.KILOMETERS,
@@ -159,6 +165,7 @@ SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
     ),
     SmhiRadarSensorDescription(
         key="nearest_precipitation_direction",
+        radar_reading=True,
         translation_key="nearest_precipitation_direction",
         device_class=SensorDeviceClass.ENUM,
         options=list(COMPASS),
@@ -187,6 +194,7 @@ SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
     ),
     SmhiRadarSensorDescription(
         key="precipitation_next_hour",
+        radar_reading=True,
         translation_key="precipitation_next_hour",
         device_class=SensorDeviceClass.PRECIPITATION_INTENSITY,
         native_unit_of_measurement=UnitOfVolumetricFlux.MILLIMETERS_PER_HOUR,
@@ -274,7 +282,10 @@ class SmhiRadarSensor(SmhiRadarEntity, SensorEntity):
     @property
     def native_value(self) -> float | int | str | datetime | None:
         """Return the sensor value."""
-        return self.entity_description.value_fn(self.coordinator.data)
+        data = self.coordinator.data
+        if self.entity_description.radar_reading and not data.measured:
+            return None
+        return self.entity_description.value_fn(data)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:

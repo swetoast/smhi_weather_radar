@@ -126,6 +126,15 @@ def warnings_payload() -> list:
     ]
 
 
+def radar_status(offline: dict[str, str] | None = None) -> dict:
+    """Radar API status: every radar delivered at NEWEST unless listed in offline."""
+    from custom_components.smhi_radar.coverage import SITES
+
+    stamp = NEWEST.strftime("%Y-%m-%dT%H:%M:%SZ")
+    areas = [{"key": key, "updated": (offline or {}).get(key, stamp)} for key in [*SITES, "sweden"]]
+    return {"key": "latest", "updated": stamp, "timeZone": "UTC", "areas": areas}
+
+
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Enable loading of custom integrations."""
@@ -137,13 +146,14 @@ def smhi_api(hass, aioclient_mock, freezer):
 
     The frame 20 minutes before the newest is missing (404) on purpose.
     """
-    from custom_components.smhi_radar.const import API_URL, FORECAST_URL, WARNINGS_URL
+    from custom_components.smhi_radar.const import API_URL, FORECAST_URL, RADAR_STATUS_URL, WARNINGS_URL
 
     freezer.move_to(NOW)
     hass.config.latitude, hass.config.longitude = HOME
     aioclient_mock.get(API_URL, json=metadata())
     aioclient_mock.get(FORECAST_URL.format(lat=HOME[0], lon=HOME[1]), json=forecast_payload())
     aioclient_mock.get(WARNINGS_URL, json=warnings_payload())
+    aioclient_mock.get(RADAR_STATUS_URL, json=radar_status())
     for valid in frame_times():
         url = frame_url(f"radar_{valid:%y%m%d%H%M}", valid)
         if valid == NEWEST - timedelta(minutes=20):

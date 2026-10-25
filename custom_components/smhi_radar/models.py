@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .analysis import NearbyRain, PointReading
+from .coverage import Coverage
 from .forecast import Outlook, PrecipitationType
 from .ibw import Warning
 from .nowcast import Nowcast
@@ -49,3 +50,9 @@ class RadarData:
     expected_type: str | None
     outlook: Outlook
     warnings: tuple[Warning, ...] | None  # None until the feed has been read
+    coverage: Coverage | None  # None until the radar status has been read
+
+    @property
+    def measured(self) -> bool:
+        """Return False when no working radar covers the location."""
+        return self.coverage is None or self.coverage.covered

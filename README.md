@@ -1,6 +1,8 @@
 # SMHI Weather Radar
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories)
+[![Validate](https://github.com/swetoast/smhi_weather_radar/actions/workflows/validate.yml/badge.svg)](https://github.com/swetoast/smhi_weather_radar/actions/workflows/validate.yml)
+[![Tests](https://github.com/swetoast/smhi_weather_radar/actions/workflows/tests.yml/badge.svg)](https://github.com/swetoast/smhi_weather_radar/actions/workflows/tests.yml)
 
 Home Assistant integration for the SMHI Sweden composite weather radar. It shows the radar as two map images, reads precipitation at your location, and gives a short nowcast of when precipitation reaches you.
 
@@ -15,6 +17,7 @@ Home Assistant integration for the SMHI Sweden composite weather radar. It shows
 - Precipitation type (rain, snow, sleet and more) from the SMHI point forecast, applied when the radar sees precipitation
 - Thunder probability and expected precipitation for the next 24 hours from the same forecast
 - SMHI weather warnings for rain, snow and thunder that cover your location
+- Radar coverage check: when the radar covering your location is offline, readings become unknown instead of looking dry
 - Diagnostics download
 
 ## Requirements
@@ -67,6 +70,7 @@ Setup uses your Home Assistant location and needs no input. Everything else is u
 | Highest intensity next hour | Highest mm/h expected within 3 km of the location in the next hour. |
 | Precipitation type | What is falling now, from the SMHI forecast when the radar sees precipitation. |
 | Radar data current | On while the newest frame is younger than the freshness threshold. |
+| Radar coverage | On while a working radar measures the location. See [Radar coverage](#radar-coverage). |
 | Thunder probability | Forecast thunderstorm probability for the current hour, in percent. |
 | Precipitation next 24 hours | Expected precipitation in mm over the next 24 hours (forecast ensemble mean). |
 | Weather warning | Highest SMHI warning level for rain, snow or thunder covering the location: `none`, `message`, `yellow`, `orange` or `red`. |
@@ -75,7 +79,7 @@ Setup uses your Home Assistant location and needs no input. Everything else is u
 
 | Attribute | Description |
 | --- | --- |
-| `status` | Radar nowcast: `ok`, `no_rain` (no precipitation within about 160 km), `uncertain` (precipitation around but its movement is unclear) or `insufficient_history`. |
+| `status` | Radar nowcast: `ok`, `no_rain` (no precipitation within about 160 km), `uncertain` (precipitation around but its movement is unclear), `insufficient_history`, or `no_coverage` (no working radar measures the location). |
 | `source` | `radar` or `forecast`: where the arrival comes from. |
 | `arrival` | Expected arrival time. |
 | `forecast_probability`, `forecast_amount` | Probability (%) and expected mm of the forecast step, when the source is the forecast. |
@@ -93,6 +97,7 @@ The other new sensors have these attributes:
 | --- | --- |
 | Thunder probability | `max_next_6h`, `max_next_6h_at`: highest probability in the next 6 hours and when. |
 | Precipitation next 24 hours | `min`, `max`: the forecast range in mm. `max_probability`: highest chance of precipitation in the period. |
+| Radar coverage | `offline_radars`: radars within reach that are not delivering. `radars`: each radar within reach with `name`, `distance_km`, `online` and `last_data`. |
 | Weather warning | `warnings`: each warning with `event`, `level`, `description` (in the Home Assistant language), `area`, `start` and `end`. |
 
 ## How the nowcast works
@@ -105,13 +110,28 @@ Extrapolation cannot predict showers that form from nothing, so a sudden shower 
 
 When the radar sees nothing arriving within its hour, or cannot tell how the precipitation moves, **Precipitation expected in** uses the SMHI point forecast instead: the first forecast step after the radar's horizon with at least 50 % chance of precipitation. The forecast steps are an hour long at first, so forecast arrivals are less precise than radar ones.
 
+## Radar coverage
+
+SMHI's composite image is transparent both where a radar sees no precipitation and where no radar is measuring at all. When a radar is out of service its area therefore looks dry, with a straight or slightly curved edge where the neighbouring radars stop reaching.
+
+The integration reads when each radar last delivered data (every 10 minutes) and works out whether the location is measured: the nearest radar must be delivering, or another delivering radar must be within about 140 km. Beyond that distance a radar's lowest beam passes over low, steady rain, so the composite cannot be trusted there.
+
+While the location is not covered:
+
+- Precipitation intensity, reflectivity, the nearby sensors, the highest intensity next hour and the precipitation type are unknown.
+- Precipitation expected in uses the SMHI forecast, with `status` set to `no_coverage`.
+- The maps still show the composite as SMHI publishes it.
+
+Radar coverage turns off and `offline_radars` names the radar.
+
 ## Forecast and warnings
 
 The point forecast (SMHI snow1g) is fetched every 30 minutes and gives the precipitation type, thunder probability and the 24 hour precipitation. Weather warnings come from the SMHI impact-based warnings feed every 10 minutes. Only rain, snow and thunder warnings whose area contains the location are used. If either source is unavailable, its sensors become unknown and the radar keeps working.
 
 ## Data and credits
 
-- Radar, forecast and warning data: [SMHI Open Data](https://www.smhi.se/data), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- Radar, radar status, forecast and warning data: [SMHI Open Data](https://www.smhi.se/data), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- Radar site positions: WMO and OPERA radar databases.
 - Basemap: [Natural Earth](https://www.naturalearthdata.com/) 1:10m, public domain.
 - Marker glyphs: [Material Design Icons](https://pictogrammers.com/library/mdi/) by Pictogrammers, Pictogrammers Free License.
 - Timestamp font: [Roboto](https://github.com/googlefonts/roboto), Apache License 2.0.

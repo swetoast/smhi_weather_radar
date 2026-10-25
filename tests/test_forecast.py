@@ -92,6 +92,7 @@ def test_expected_in_hands_over_to_forecast(freezer) -> None:
         analysis=SimpleNamespace(nowcast=Nowcast("no_rain", valid=NOW)),
         outlook=Outlook(arrival=later, arrival_probability=80, arrival_amount=1.2),
         expected_type="rain",
+        measured=True,
     )
     assert _minutes_until(data) == 180
     attributes = _nowcast_attributes(data)

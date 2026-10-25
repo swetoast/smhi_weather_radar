@@ -143,6 +143,13 @@
       },
       "precipitation_nearby": {
         "name": "Nederbörd i närheten"
+      },
+      "radar_coverage": {
+        "name": "Radartäckning",
+        "state": {
+          "on": "Täckt",
+          "off": "Inte täckt"
+        }
       }
     }
   }

@@ -143,6 +143,13 @@
       },
       "precipitation_nearby": {
         "name": "Precipitation nearby"
+      },
+      "radar_coverage": {
+        "name": "Radar coverage",
+        "state": {
+          "on": "Covered",
+          "off": "Not covered"
+        }
       }
     }
   }

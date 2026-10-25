@@ -46,6 +46,9 @@ PERSON_RENDER_COOLDOWN_ANIMATED = 300
 # Precipitation type from the snow1g point forecast (sensors only).
 FORECAST_REFRESH_MINUTES = 30
 FORECAST_MAX_AGE_HOURS = 3
+RADAR_STATUS_URL = "https://opendata-download-radar.smhi.se/api/version/latest.json"
+RADAR_STATUS_REFRESH_MINUTES = 10
+RADAR_STATUS_MAX_AGE_HOURS = 1
 WARNINGS_URL = "https://opendata-download-warnings.smhi.se/ibww/api/version/1/warning.json"
 WARNINGS_REFRESH_MINUTES = 10
 WARNINGS_MAX_AGE_HOURS = 2

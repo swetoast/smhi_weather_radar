@@ -16,7 +16,7 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_time_changed,
 )
 
-from custom_components.smhi_radar.const import API_URL, DOMAIN, WARNINGS_URL
+from custom_components.smhi_radar.const import API_URL, DOMAIN, RADAR_STATUS_URL, WARNINGS_URL
 
 PREFIX = "smhi_weather_radar"
 
@@ -56,6 +56,7 @@ async def test_setup_history_and_sensors(hass: HomeAssistant, smhi_api) -> None:
     warning = hass.states.get(f"sensor.{PREFIX}_weather_warning")
     assert warning.state == "yellow"
     assert [w["event"] for w in warning.attributes["warnings"]] == ["rain"]
+    assert state(hass, "binary_sensor.radar_coverage") == "on"
 
     for entity in ("image.weather_radar", "image.local_weather_radar"):
         image = await async_get_image(hass, f"image.{PREFIX}_{entity.split('.')[1]}")
@@ -82,6 +83,7 @@ async def test_outage_keeps_last_frame(hass: HomeAssistant, smhi_api, freezer) -
     smhi_api.clear_requests()
     smhi_api.get(API_URL, status=500)
     smhi_api.get(WARNINGS_URL, status=500)
+    smhi_api.get(RADAR_STATUS_URL, status=500)
 
     freezer.tick(timedelta(minutes=20))
     async_fire_time_changed(hass)
@@ -192,6 +194,7 @@ async def test_forecast_outage_does_not_affect_radar(hass: HomeAssistant, smhi_a
     smhi_api.get(API_URL, json=metadata())
     smhi_api.get(FORECAST_URL.format(lat=HOME[0], lon=HOME[1]), status=503)
     smhi_api.get(WARNINGS_URL, status=503)
+    smhi_api.get(RADAR_STATUS_URL, status=503)
     for valid in frame_times():
         smhi_api.get(frame_url(f"radar_{valid:%y%m%d%H%M}", valid), content=cell_frame(valid))
     await _setup(hass, nearby_radius=25)
@@ -201,3 +204,37 @@ async def test_forecast_outage_does_not_affect_radar(hass: HomeAssistant, smhi_a
     assert state(hass, "sensor.precipitation_intensity") == "0.0"
     assert state(hass, "sensor.weather_warning") == "unknown"
     assert state(hass, "sensor.thunder_probability") == "unknown"
+
+
+async def test_offline_radar_is_not_dry_weather(hass: HomeAssistant, smhi_api) -> None:
+    """Vara stale since 22 October: Boras readings are unknown, not dry; the forecast takes over."""
+    from .conftest import radar_status
+
+    smhi_api.clear_requests()
+    from .conftest import HOME, cell_frame, forecast_payload, frame_times, metadata, warnings_payload
+    from custom_components.smhi_radar.api import frame_url
+    from custom_components.smhi_radar.const import FORECAST_URL
+
+    smhi_api.get(API_URL, json=metadata())
+    smhi_api.get(FORECAST_URL.format(lat=HOME[0], lon=HOME[1]), json=forecast_payload())
+    smhi_api.get(WARNINGS_URL, json=warnings_payload())
+    smhi_api.get(RADAR_STATUS_URL, json=radar_status({"vara": "2026-10-22T08:09:56Z"}))
+    for valid in frame_times():
+        smhi_api.get(frame_url(f"radar_{valid:%y%m%d%H%M}", valid), content=cell_frame(valid))
+    await _setup(hass)
+
+    coverage = hass.states.get(f"binary_sensor.{PREFIX}_radar_coverage")
+    assert coverage.state == "off"
+    assert coverage.attributes["offline_radars"] == ["Vara"]
+    for entity in (
+        "sensor.precipitation_intensity", "sensor.nearest_precipitation_distance",
+        "sensor.highest_intensity_next_hour", "sensor.precipitation_type",
+        "binary_sensor.precipitation_nearby",
+    ):
+        assert state(hass, entity) == "unknown", entity
+    expected = hass.states.get(f"sensor.{PREFIX}_precipitation_expected_in")
+    assert expected.attributes["status"] == "no_coverage"
+    assert expected.attributes["source"] == "forecast"
+    assert expected.state == "0"  # the forecast has precipitation in the current hour
+    for entity in ("image.weather_radar", "image.local_weather_radar"):
+        assert hass.states.get(f"image.{PREFIX}_{entity.split('.')[1]}") is not None

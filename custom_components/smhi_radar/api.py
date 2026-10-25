@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
-from .const import API_HOST, API_URL, DEFAULT_TIMEOUT, FORECAST_URL, WARNINGS_URL
+from .const import API_HOST, API_URL, DEFAULT_TIMEOUT, FORECAST_URL, RADAR_STATUS_URL, WARNINGS_URL
 from .exceptions import SmhiRadarConnectionError, SmhiRadarDataError, SmhiRadarError
 from .models import RadarMetadata
 
@@ -160,3 +160,14 @@ class SmhiRadarClient:
                 return await response.json(content_type=None)
         except (TimeoutError, ClientError, ValueError) as err:
             raise SmhiRadarConnectionError("Could not retrieve SMHI warnings") from err
+
+    async def async_get_radar_status(self) -> Any:
+        """Fetch when each radar last delivered data (raw JSON)."""
+        try:
+            async with self._session.get(
+                RADAR_STATUS_URL, headers={"Accept": "application/json"}, timeout=self._timeout
+            ) as response:
+                response.raise_for_status()
+                return await response.json(content_type=None)
+        except (TimeoutError, ClientError, ValueError) as err:
+            raise SmhiRadarConnectionError("Could not retrieve SMHI radar status") from err

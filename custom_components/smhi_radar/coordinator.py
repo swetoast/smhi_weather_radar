@@ -36,10 +36,13 @@ from .const import (
     HISTORY_MINUTES,
     PERSON_RENDER_COOLDOWN,
     PERSON_RENDER_COOLDOWN_ANIMATED,
+    RADAR_STATUS_MAX_AGE_HOURS,
+    RADAR_STATUS_REFRESH_MINUTES,
     WARNINGS_MAX_AGE_HOURS,
     WARNINGS_REFRESH_MINUTES,
 )
 from .exceptions import SmhiRadarError
+from .coverage import coverage, parse_status
 from .forecast import PrecipitationStep, classify, expected_type, outlook, parse_forecast
 from .ibw import Warning, for_location, parse_warnings
 from .models import Analysis, RadarData, RadarMetadata
@@ -86,6 +89,8 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
         self._forecast_location: tuple[float, float] | None = None
         self._warnings: list[Warning] = []
         self._warnings_fetched: datetime | None = None
+        self._radar_status: dict[str, datetime] = {}
+        self._status_fetched: datetime | None = None
         self._render_lock = asyncio.Lock()
         self._person_debouncer = Debouncer(
             hass,
@@ -207,6 +212,7 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
         self.failed_update_count = 0
         await self._async_refresh_forecast(settings.latitude, settings.longitude)
         await self._async_refresh_warnings()
+        await self._async_refresh_radar_status()
 
         current = self.data
         markers = self._current_markers()
@@ -275,6 +281,20 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
             return
         self._warnings_fetched = now
 
+    async def _async_refresh_radar_status(self) -> None:
+        """Fetch per-radar delivery times when due; failures keep the last."""
+        now = dt_util.utcnow()
+        if self._status_fetched and now - self._status_fetched < timedelta(
+            minutes=RADAR_STATUS_REFRESH_MINUTES
+        ):
+            return
+        try:
+            self._radar_status = parse_status(await self.client.async_get_radar_status())
+        except SmhiRadarError as err:
+            _LOGGER.debug("SMHI radar status not updated: %s", err)
+            return
+        self._status_fetched = now
+
     def _context(self, analysis: Analysis, latitude: float, longitude: float) -> dict[str, Any]:
         """Combine radar (is it wet, nowcast) with forecast and warnings."""
         now = dt_util.utcnow()
@@ -283,12 +303,23 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
             hours=FORECAST_MAX_AGE_HOURS
         ):
             steps = []
+        area = None
+        if self._status_fetched and now - self._status_fetched <= timedelta(
+            hours=RADAR_STATUS_MAX_AGE_HOURS
+        ):
+            area = coverage(self._radar_status, latitude, longitude, now)
+        measured = area is None or area.covered
+
         intensity = analysis.reading.intensity
         nearby = analysis.nearby.raining
         wet = None if intensity is None and nearby is None else bool(intensity) or bool(nearby)
+        if not measured:
+            wet = None  # no working radar here: dry on the image means nothing
 
         nowcast = analysis.nowcast
-        if nowcast.arrival is not None:
+        if not measured:
+            after = now  # the radar cannot see the location; ask the forecast
+        elif nowcast.arrival is not None:
             after = None  # the radar already expects precipitation
         elif nowcast.status in NOWCAST_CONFIDENT and nowcast.valid is not None:
             # Radar sees nothing arriving within its horizon; look beyond it.
@@ -296,7 +327,7 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
         else:
             after = now
         future = outlook(steps, now, after)
-        arrival = nowcast.arrival or future.arrival
+        arrival = (nowcast.arrival if measured else None) or future.arrival
         minutes = None if arrival is None else max(0, round((arrival - now).total_seconds() / 60))
 
         warnings = None
@@ -309,6 +340,7 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
             "expected_type": expected_type(steps, now, minutes),
             "outlook": future,
             "warnings": warnings,
+            "coverage": area,
         }
 
     def _history(self) -> list[StoredFrame]:

@@ -139,6 +139,12 @@
           "on": "mdi:umbrella",
           "off": "mdi:umbrella-closed-outline"
         }
+      },
+      "radar_coverage": {
+        "default": "mdi:radar",
+        "state": {
+          "off": "mdi:signal-off"
+        }
       }
     }
   }
