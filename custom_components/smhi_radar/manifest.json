@@ -1,0 +1,20 @@
+{
+  "domain": "smhi_radar",
+  "name": "SMHI Weather Radar",
+  "codeowners": [
+    "@swetoast"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "diagnostics"
+  ],
+  "documentation": "https://github.com/swetoast/smhi_weather_radar",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/swetoast/smhi_weather_radar/issues",
+  "requirements": [
+    "numpy>=2.0"
+  ],
+  "single_config_entry": true,
+  "version": "0.3.2"
+}

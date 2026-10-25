@@ -1,0 +1,133 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Konfigurera SMHI Weather Radar",
+        "description": "Använder SMHI:s svenska radarkomposit för platsen som är inställd i Home Assistant. Egen plats, personer på kartan och animering kan väljas i alternativen."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "SMHI Weather Radar är redan konfigurerad."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Konfigurera SMHI Weather Radar",
+        "data": {
+          "update_interval": "Uppdateringsintervall",
+          "stale_threshold": "Gräns för aktuell data",
+          "local_radius": "Radie för lokal karta",
+          "nearby_radius": "Närområdets radie",
+          "persons": "Personer på kartan",
+          "animate": "Animera senaste timmen",
+          "use_home_location": "Använd Home Assistants plats"
+        },
+        "data_description": {
+          "update_interval": "Hur ofta SMHI ska kontrolleras efter en ny radarbild. SMHI publicerar en var femte minut.",
+          "stale_threshold": "Högsta ålder på radarbilden innan Radardata aktuell slås av.",
+          "local_radius": "Avstånd från platsen till kanten av den lokala radarkartan.",
+          "nearby_radius": "Radie för Nederbörd i närheten och högsta intensitet i närheten. Visas som en streckad ring på den lokala kartan.",
+          "persons": "Visas med sin GPS-position. Personer som är hemma placeras bredvid hemmarkören.",
+          "animate": "Båda kartorna visar senaste timmens bilder i en slinga. Bilderna blir större.",
+          "use_home_location": "Stäng av för att välja en egen plats i nästa steg."
+        }
+      },
+      "location": {
+        "title": "Egen plats",
+        "description": "Välj var radarnederbörden ska läsas av. Platsen måste ligga inom SMHI:s radartäckning.",
+        "data": {
+          "location": "Plats"
+        }
+      }
+    },
+    "error": {
+      "outside_coverage": "Platsen ligger utanför SMHI:s radartäckning."
+    }
+  },
+  "exceptions": {
+    "outside_coverage": {
+      "message": "Den inställda platsen ligger utanför SMHI:s radartäckning. Välj en plats inom täckningen i integrationens alternativ."
+    }
+  },
+  "entity": {
+    "image": {
+      "weather_radar": {
+        "name": "Väderradar"
+      },
+      "local_radar": {
+        "name": "Lokal väderradar"
+      }
+    },
+    "sensor": {
+      "precipitation_intensity": {
+        "name": "Nederbördsintensitet"
+      },
+      "reflectivity": {
+        "name": "Reflektivitet"
+      },
+      "observation_time": {
+        "name": "Observationstid"
+      },
+      "nearby_max_intensity": {
+        "name": "Högsta intensitet i närheten"
+      },
+      "nearest_precipitation_distance": {
+        "name": "Avstånd till närmaste nederbörd"
+      },
+      "nearest_precipitation_direction": {
+        "name": "Riktning till närmaste nederbörd",
+        "state": {
+          "n": "N",
+          "nne": "NNO",
+          "ne": "NO",
+          "ene": "ONO",
+          "e": "O",
+          "ese": "OSO",
+          "se": "SO",
+          "sse": "SSO",
+          "s": "S",
+          "ssw": "SSV",
+          "sw": "SV",
+          "wsw": "VSV",
+          "w": "V",
+          "wnw": "VNV",
+          "nw": "NV",
+          "nnw": "NNV"
+        }
+      },
+      "rain_expected_in": {
+        "name": "Nederbörd väntas om"
+      },
+      "precipitation_next_hour": {
+        "name": "Högsta intensitet kommande timme"
+      },
+      "precipitation_type": {
+        "name": "Nederbördstyp",
+        "state": {
+          "none": "Ingen",
+          "rain": "Regn",
+          "thunderstorm": "Åska",
+          "freezing_rain": "Underkylt regn",
+          "mixed_ice": "Blandat eller is",
+          "snow": "Snö",
+          "wet_snow": "Blötsnö",
+          "rain_and_snow": "Snöblandat regn",
+          "ice_pellets": "Iskorn",
+          "graupel": "Snöhagel",
+          "hail": "Hagel",
+          "drizzle": "Duggregn",
+          "freezing_drizzle": "Underkylt duggregn"
+        }
+      }
+    },
+    "binary_sensor": {
+      "radar_current": {
+        "name": "Radardata aktuell"
+      },
+      "precipitation_nearby": {
+        "name": "Nederbörd i närheten"
+      }
+    }
+  }
+}

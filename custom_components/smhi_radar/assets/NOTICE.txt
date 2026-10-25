@@ -1,0 +1,16 @@
+Third party assets in this folder
+
+basemap.json
+  Natural Earth 1:10m vector data (public domain), projected to EPSG:3006.
+  https://www.naturalearthdata.com/
+  Built with script/build_basemap.py.
+
+mdi_icons.ttf
+  Subset (mdi:home, mdi:account) of Material Design Icons 7.4.47
+  by Pictogrammers, Pictogrammers Free License.
+  https://pictogrammers.com/docs/general/license/
+
+roboto_digits.ttf
+  Subset (digits and date punctuation) of Roboto Medium by Google,
+  Apache License 2.0.
+  https://github.com/googlefonts/roboto

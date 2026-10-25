@@ -1,0 +1,118 @@
+{
+  "entity": {
+    "image": {
+      "weather_radar": {
+        "default": "mdi:radar"
+      },
+      "local_radar": {
+        "default": "mdi:map-marker-radius"
+      }
+    },
+    "sensor": {
+      "precipitation_intensity": {
+        "default": "mdi:umbrella-closed-outline",
+        "range": {
+          "0": "mdi:umbrella-closed-outline",
+          "0.1": "mdi:umbrella-outline",
+          "2.5": "mdi:umbrella",
+          "10": "mdi:weather-pouring"
+        }
+      },
+      "reflectivity": {
+        "default": "mdi:radar"
+      },
+      "observation_time": {
+        "default": "mdi:clock-outline"
+      },
+      "nearby_max_intensity": {
+        "default": "mdi:umbrella-closed-outline",
+        "range": {
+          "0": "mdi:umbrella-closed-outline",
+          "0.1": "mdi:umbrella-outline",
+          "2.5": "mdi:umbrella",
+          "10": "mdi:weather-pouring"
+        }
+      },
+      "nearest_precipitation_distance": {
+        "default": "mdi:map-marker-distance",
+        "range": {
+          "0": "mdi:map-marker-alert",
+          "0.1": "mdi:map-marker-radius",
+          "25": "mdi:map-marker-distance"
+        }
+      },
+      "nearest_precipitation_direction": {
+        "default": "mdi:compass-outline",
+        "state": {
+          "n": "mdi:arrow-up",
+          "nne": "mdi:arrow-up",
+          "ne": "mdi:arrow-top-right",
+          "ene": "mdi:arrow-right",
+          "e": "mdi:arrow-right",
+          "ese": "mdi:arrow-right",
+          "se": "mdi:arrow-bottom-right",
+          "sse": "mdi:arrow-down",
+          "s": "mdi:arrow-down",
+          "ssw": "mdi:arrow-down",
+          "sw": "mdi:arrow-bottom-left",
+          "wsw": "mdi:arrow-left",
+          "w": "mdi:arrow-left",
+          "wnw": "mdi:arrow-left",
+          "nw": "mdi:arrow-top-left",
+          "nnw": "mdi:arrow-up"
+        }
+      },
+      "rain_expected_in": {
+        "default": "mdi:timer-sand-empty",
+        "range": {
+          "0": "mdi:umbrella",
+          "1": "mdi:timer-sand",
+          "30": "mdi:timer-sand-empty"
+        }
+      },
+      "precipitation_next_hour": {
+        "default": "mdi:umbrella-closed-outline",
+        "range": {
+          "0": "mdi:umbrella-closed-outline",
+          "0.1": "mdi:umbrella-outline",
+          "2.5": "mdi:umbrella",
+          "10": "mdi:weather-pouring"
+        }
+      },
+      "precipitation_type": {
+        "default": "mdi:weather-pouring",
+        "state": {
+          "none": "mdi:umbrella-closed-outline",
+          "rain": "mdi:weather-rainy",
+          "drizzle": "mdi:weather-partly-rainy",
+          "thunderstorm": "mdi:weather-lightning-rainy",
+          "snow": "mdi:weather-snowy",
+          "wet_snow": "mdi:weather-snowy-rainy",
+          "rain_and_snow": "mdi:weather-snowy-rainy",
+          "mixed_ice": "mdi:weather-snowy-rainy",
+          "freezing_rain": "mdi:snowflake-melt",
+          "freezing_drizzle": "mdi:snowflake-melt",
+          "ice_pellets": "mdi:weather-hail",
+          "graupel": "mdi:weather-hail",
+          "hail": "mdi:weather-hail"
+        }
+      }
+    },
+    "binary_sensor": {
+      "radar_current": {
+        "default": "mdi:radar",
+        "state": {
+          "on": "mdi:radar",
+          "off": "mdi:clock-alert-outline"
+        }
+      },
+      "precipitation_nearby": {
+        "default": "mdi:umbrella-closed-outline",
+        "state": {
+          "on": "mdi:umbrella",
+          "off": "mdi:umbrella-closed-outline"
+        }
+      }
+    }
+  }
+}

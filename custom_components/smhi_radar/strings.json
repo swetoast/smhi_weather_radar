@@ -1,0 +1,133 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up SMHI Weather Radar",
+        "description": "Uses SMHI's Sweden composite radar at your Home Assistant location. A custom location, people to show on the map and animation can be set in the options."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "SMHI Weather Radar is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure SMHI Weather Radar",
+        "data": {
+          "update_interval": "Update interval",
+          "stale_threshold": "Data freshness threshold",
+          "local_radius": "Local map radius",
+          "nearby_radius": "Nearby radius",
+          "persons": "People on the map",
+          "animate": "Animate the last hour",
+          "use_home_location": "Use Home Assistant location"
+        },
+        "data_description": {
+          "update_interval": "How often to check SMHI for a new radar frame. SMHI publishes one every 5 minutes.",
+          "stale_threshold": "Maximum frame age before Radar data current turns off.",
+          "local_radius": "Distance from the location to the edge of the local radar map.",
+          "nearby_radius": "Radius for Precipitation nearby and the highest intensity nearby. Shown as a dashed ring on the local map.",
+          "persons": "Shown with their GPS position. People at home are placed next to the home marker.",
+          "animate": "Both maps loop the last hour of frames. The images get larger.",
+          "use_home_location": "Turn off to pick a custom location in the next step."
+        }
+      },
+      "location": {
+        "title": "Custom location",
+        "description": "Pick where radar precipitation should be read. The location must be inside SMHI radar coverage.",
+        "data": {
+          "location": "Location"
+        }
+      }
+    },
+    "error": {
+      "outside_coverage": "This location is outside SMHI radar coverage."
+    }
+  },
+  "exceptions": {
+    "outside_coverage": {
+      "message": "The configured location is outside SMHI radar coverage. Pick a location inside the coverage in the integration options."
+    }
+  },
+  "entity": {
+    "image": {
+      "weather_radar": {
+        "name": "Weather radar"
+      },
+      "local_radar": {
+        "name": "Local weather radar"
+      }
+    },
+    "sensor": {
+      "precipitation_intensity": {
+        "name": "Precipitation intensity"
+      },
+      "reflectivity": {
+        "name": "Reflectivity"
+      },
+      "observation_time": {
+        "name": "Observation time"
+      },
+      "nearby_max_intensity": {
+        "name": "Highest intensity nearby"
+      },
+      "nearest_precipitation_distance": {
+        "name": "Nearest precipitation distance"
+      },
+      "nearest_precipitation_direction": {
+        "name": "Nearest precipitation direction",
+        "state": {
+          "n": "N",
+          "nne": "NNE",
+          "ne": "NE",
+          "ene": "ENE",
+          "e": "E",
+          "ese": "ESE",
+          "se": "SE",
+          "sse": "SSE",
+          "s": "S",
+          "ssw": "SSW",
+          "sw": "SW",
+          "wsw": "WSW",
+          "w": "W",
+          "wnw": "WNW",
+          "nw": "NW",
+          "nnw": "NNW"
+        }
+      },
+      "rain_expected_in": {
+        "name": "Precipitation expected in"
+      },
+      "precipitation_next_hour": {
+        "name": "Highest intensity next hour"
+      },
+      "precipitation_type": {
+        "name": "Precipitation type",
+        "state": {
+          "none": "None",
+          "rain": "Rain",
+          "thunderstorm": "Thunderstorm",
+          "freezing_rain": "Freezing rain",
+          "mixed_ice": "Mixed or ice",
+          "snow": "Snow",
+          "wet_snow": "Wet snow",
+          "rain_and_snow": "Rain and snow",
+          "ice_pellets": "Ice pellets",
+          "graupel": "Graupel",
+          "hail": "Hail",
+          "drizzle": "Drizzle",
+          "freezing_drizzle": "Freezing drizzle"
+        }
+      }
+    },
+    "binary_sensor": {
+      "radar_current": {
+        "name": "Radar data current"
+      },
+      "precipitation_nearby": {
+        "name": "Precipitation nearby"
+      }
+    }
+  }
+}
