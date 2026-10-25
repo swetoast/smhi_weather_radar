@@ -19,7 +19,12 @@
         }
       },
       "reflectivity": {
-        "default": "mdi:radar"
+        "default": "mdi:radar",
+        "range": {
+          "5": "mdi:weather-rainy",
+          "30": "mdi:weather-pouring",
+          "45": "mdi:weather-lightning-rainy"
+        }
       },
       "observation_time": {
         "default": "mdi:clock-outline"
@@ -123,6 +128,14 @@
           "orange": "mdi:alert",
           "red": "mdi:alert-octagon"
         }
+      },
+      "radar_coverage": {
+        "default": "mdi:radar",
+        "state": {
+          "full": "mdi:radar",
+          "filled": "mdi:access-point-network",
+          "gap": "mdi:access-point-network-off"
+        }
       }
     },
     "binary_sensor": {
@@ -138,12 +151,6 @@
         "state": {
           "on": "mdi:umbrella",
           "off": "mdi:umbrella-closed-outline"
-        }
-      },
-      "radar_coverage": {
-        "default": "mdi:radar",
-        "state": {
-          "off": "mdi:signal-off"
         }
       }
     }

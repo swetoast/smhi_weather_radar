@@ -26,9 +26,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up the binary sensors."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        [SmhiRadarCurrent(coordinator), SmhiPrecipitationNearby(coordinator), SmhiRadarCoverage(coordinator)]
-    )
+    async_add_entities([SmhiRadarCurrent(coordinator), SmhiPrecipitationNearby(coordinator)])
 
 
 class SmhiRadarCurrent(SmhiRadarEntity, BinarySensorEntity):
@@ -64,40 +62,9 @@ class SmhiPrecipitationNearby(SmhiRadarEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool | None:
         """Return True if it rains within the radius; None without data."""
-        data = self.coordinator.data
-        return data.analysis.nearby.raining if data.measured else None
-
-
-class SmhiRadarCoverage(SmhiRadarEntity, BinarySensorEntity):
-    """On while a working radar measures the location."""
-
-    _attr_translation_key = "radar_coverage"
-
-    def __init__(self, coordinator: SmhiRadarCoordinator) -> None:
-        """Initialize the sensor."""
-        super().__init__(coordinator, "radar_coverage")
+        return self.coordinator.data.location.raining_nearby
 
     @property
-    def is_on(self) -> bool | None:
-        """Return True when covered; None before the radar status is known."""
-        coverage = self.coordinator.data.coverage
-        return None if coverage is None else coverage.covered
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Return the radars within reach and which are offline."""
-        coverage = self.coordinator.data.coverage
-        if coverage is None:
-            return None
-        return {
-            "offline_radars": coverage.offline,
-            "radars": [
-                {
-                    "name": radar.name,
-                    "distance_km": radar.distance_km,
-                    "online": radar.online,
-                    "last_data": radar.updated.isoformat() if radar.updated else None,
-                }
-                for radar in coverage.radars
-            ],
-        }
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return where the answer came from."""
+        return {"source": self.coordinator.data.location.nearby_source}

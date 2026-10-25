@@ -31,6 +31,33 @@ class Analysis:
     reading: PointReading
     nearby: NearbyRain
     nowcast: Nowcast
+    # "measured", "extrapolated" (traced into a radar gap) or None (unknown).
+    reading_source: str | None = "measured"
+    nearby_source: str | None = "measured"
+    covered: bool = True  # a working radar measures the location itself
+
+
+@dataclass(frozen=True, slots=True)
+class Location:
+    """Final values at the location, each with where it came from.
+
+    Sources: "measured" (radar), "extrapolated" (radar traced into a gap),
+    "forecast" (SMHI point forecast, where the radar cannot see), or None.
+    """
+
+    intensity: float | None
+    intensity_source: str | None
+    reflectivity: int | None
+    raining_nearby: bool | None
+    nearby_max: float | None
+    nearest_km: float | None
+    nearest_bearing: float | None
+    nearest_direction: str | None
+    nearby_source: str | None
+    next_hour_max: float | None
+    next_hour_source: str | None
+    arrival: datetime | None
+    arrival_source: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,8 +78,4 @@ class RadarData:
     outlook: Outlook
     warnings: tuple[Warning, ...] | None  # None until the feed has been read
     coverage: Coverage | None  # None until the radar status has been read
-
-    @property
-    def measured(self) -> bool:
-        """Return False when no working radar covers the location."""
-        return self.coverage is None or self.coverage.covered
+    location: Location

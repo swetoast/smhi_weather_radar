@@ -215,16 +215,25 @@ def nearby_rain(
 
     inside = distance <= radius_km * 1000
     values = window[inside]
-    if values.size == 0 or np.isnan(values).all():
+    unknown = np.isnan(values)
+    if values.size == 0 or unknown.all():
         raining, max_intensity = None, None
     else:
         max_intensity = float(np.nanmax(values))
         raining = max_intensity > 0
+        if not raining and unknown.any():
+            # Dry where measured, but part of the radius is not measured.
+            raining, max_intensity = None, None
 
-    rain = (window > 0) & (distance <= search_km * 1000)
+    searched = distance <= search_km * 1000
+    rain = (window > 0) & searched
+    gap = np.isnan(window) & searched
     if not rain.any():
         return NearbyRain(raining, max_intensity, None, None, None)
     masked = np.where(rain, distance, np.inf)
+    if gap.any() and float(distance[gap].min()) < float(masked.min()):
+        # Unmeasured ground is closer than the nearest measured rain.
+        return NearbyRain(raining, max_intensity, None, None, None)
     row, col = np.unravel_index(int(np.argmin(masked)), masked.shape)
     # Rain in the location's own pixel counts as zero distance.
     own_pixel = (row + y0, col + x0) == (math.floor(home_y), math.floor(home_x))

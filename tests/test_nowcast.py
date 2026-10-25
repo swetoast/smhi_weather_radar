@@ -113,3 +113,38 @@ def test_raining_now_and_countdown() -> None:
     late = times[-1] + timedelta(minutes=8)  # SMHI frames are a few minutes old
     assert result.minutes_until(late) == max(0, result.expected_in - 8)
     assert result.minutes_until(times[-1] + timedelta(hours=2)) == 0
+
+
+def test_gap_is_filled_from_upstream_and_otherwise_unknown() -> None:
+    """Rain seen upstream 10 minutes ago is carried into a gap; untraceable gap stays unknown."""
+    from custom_components.smhi_radar.nowcast import WINDOW, Motion, fill_gap
+
+    newest = datetime(2026, 10, 24, 15, 0, tzinfo=UTC)
+    covered = np.ones((WINDOW, WINDOW), bool)
+    covered[:, 80:100] = False  # a gap band
+    old = np.zeros((WINDOW, WINDOW), np.float32)
+    old[70:75, 70:75] = 2.0  # rain west of the gap 10 minutes ago
+    now = np.zeros((WINDOW, WINDOW), np.float32)
+    fields = {newest - timedelta(minutes=10): old, newest: now}
+    values, filled = fill_gap(fields, covered, newest, Motion(1.2, 0.0, 10))  # 12 px east in 10 min
+    assert values[72, 84] == 2.0 and filled[72, 84]
+    assert np.isnan(values[72, 99])  # came from inside the gap: unknown
+    assert values[72, 60] == 0.0 and not filled[72, 60]  # covered ground is measured
+    unknown, _ = fill_gap(fields, covered, newest, None)
+    assert np.isnan(unknown[:, 80:100]).all()
+
+
+def test_nearby_is_unknown_not_dry_next_to_a_gap() -> None:
+    """Dry where measured but a gap within the radius gives unknown; rain anywhere still counts."""
+    from custom_components.smhi_radar.analysis import nearby_rain
+
+    home_x, home_y = GRID.to_pixel(*HOME)
+    rate = np.zeros((GRID.height, GRID.width), np.float32)
+    x, y = int(home_x), int(home_y)
+    rate[y - 2 : y + 3, x + 2 : x + 6] = np.nan  # gap just east of home
+    result = nearby_rain(rate, GRID, *HOME, 10, 100)
+    assert result.raining is None and result.nearest_km is None
+    rate[y, x - 3] = 1.5  # rain 6 km west
+    result = nearby_rain(rate, GRID, *HOME, 10, 100)
+    assert result.raining is True
+    assert result.nearest_km is None  # the gap is closer than that rain

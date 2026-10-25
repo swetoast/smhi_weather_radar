@@ -42,10 +42,10 @@ from .const import (
     WARNINGS_REFRESH_MINUTES,
 )
 from .exceptions import SmhiRadarError
-from .coverage import coverage, parse_status
-from .forecast import PrecipitationStep, classify, expected_type, outlook, parse_forecast
+from .coverage import coverage, online_radars, parse_status
+from .forecast import Outlook, PrecipitationStep, classify, expected_type, outlook, parse_forecast
 from .ibw import Warning, for_location, parse_warnings
-from .models import Analysis, RadarData, RadarMetadata
+from .models import Analysis, Location, RadarData, RadarMetadata
 from .nowcast import LEAD_MAX
 from .pipeline import Settings, StoredFrame, analyse, decode, render
 from .render import Marker
@@ -91,6 +91,7 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
         self._warnings_fetched: datetime | None = None
         self._radar_status: dict[str, datetime] = {}
         self._status_fetched: datetime | None = None
+        self._analysed_online: frozenset[str] | None = None
         self._render_lock = asyncio.Lock()
         self._person_debouncer = Debouncer(
             hass,
@@ -216,11 +217,13 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
 
         current = self.data
         markers = self._current_markers()
+        online = self._online(dt_util.utcnow())
         if (
             current is not None
             and current.metadata.valid == metadata.valid
             and (current.latitude, current.longitude) == (settings.latitude, settings.longitude)
             and markers == self._markers
+            and online == self._analysed_online
         ):
             context = self._context(current.analysis, settings.latitude, settings.longitude)
             if all(getattr(current, key) == value for key, value in context.items()):
@@ -229,7 +232,8 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
 
         async with self._render_lock:
             frames = self._history()
-            analysis = await self.hass.async_add_executor_job(analyse, frames, settings)
+            analysis = await self.hass.async_add_executor_job(analyse, frames, settings, online)
+            self._analysed_online = online
             national, local = await self._async_render(markers)
         return RadarData(
             metadata=metadata,
@@ -295,8 +299,16 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
             return
         self._status_fetched = now
 
+    def _online(self, now: datetime) -> frozenset[str] | None:
+        """Return the delivering radars, or None while the status is unknown."""
+        if self._status_fetched is None or now - self._status_fetched > timedelta(
+            hours=RADAR_STATUS_MAX_AGE_HOURS
+        ):
+            return None
+        return online_radars(self._radar_status, now)
+
     def _context(self, analysis: Analysis, latitude: float, longitude: float) -> dict[str, Any]:
-        """Combine radar (is it wet, nowcast) with forecast and warnings."""
+        """Combine radar (measured or traced into gaps) with forecast and warnings."""
         now = dt_util.utcnow()
         steps = self._forecast
         if self._forecast_fetched is None or now - self._forecast_fetched > timedelta(
@@ -304,31 +316,27 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
         ):
             steps = []
         area = None
-        if self._status_fetched and now - self._status_fetched <= timedelta(
-            hours=RADAR_STATUS_MAX_AGE_HOURS
-        ):
+        if self._online(now) is not None:
             area = coverage(self._radar_status, latitude, longitude, now)
-        measured = area is None or area.covered
-
-        intensity = analysis.reading.intensity
-        nearby = analysis.nearby.raining
-        wet = None if intensity is None and nearby is None else bool(intensity) or bool(nearby)
-        if not measured:
-            wet = None  # no working radar here: dry on the image means nothing
 
         nowcast = analysis.nowcast
-        if not measured:
-            after = now  # the radar cannot see the location; ask the forecast
-        elif nowcast.arrival is not None:
+        if nowcast.arrival is not None:
             after = None  # the radar already expects precipitation
-        elif nowcast.status in NOWCAST_CONFIDENT and nowcast.valid is not None:
-            # Radar sees nothing arriving within its horizon; look beyond it.
+        elif nowcast.valid is not None and nowcast.status == "no_rain":
             after = max(now, nowcast.valid + timedelta(minutes=LEAD_MAX))
+        elif nowcast.valid is not None and nowcast.status == "ok" and nowcast.horizon is not None:
+            # Radar sees nothing arriving as far as it can follow; look beyond.
+            after = max(now, nowcast.valid + timedelta(minutes=nowcast.horizon))
         else:
             after = now
         future = outlook(steps, now, after)
-        arrival = (nowcast.arrival if measured else None) or future.arrival
-        minutes = None if arrival is None else max(0, round((arrival - now).total_seconds() / 60))
+        location = _location(analysis, future)
+        wet = None
+        if location.intensity is not None or location.raining_nearby is not None:
+            wet = bool(location.intensity) or bool(location.raining_nearby)
+        minutes = (
+            None if location.arrival is None else max(0, round((location.arrival - now).total_seconds() / 60))
+        )
 
         warnings = None
         if self._warnings_fetched and now - self._warnings_fetched <= timedelta(
@@ -341,6 +349,7 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
             "outlook": future,
             "warnings": warnings,
             "coverage": area,
+            "location": location,
         }
 
     def _history(self) -> list[StoredFrame]:
@@ -402,3 +411,41 @@ class SmhiRadarCoordinator(DataUpdateCoordinator[RadarData]):
                 self._frames[valid] = await self.hass.async_add_executor_job(decode, valid, png)
             except SmhiRadarError:
                 self._unavailable.add(valid)
+
+
+def _location(analysis: Analysis, future: Outlook) -> Location:
+    """Radar first (measured, then traced into gaps), the forecast where it cannot see."""
+    reading, nearby, nowcast = analysis.reading, analysis.nearby, analysis.nowcast
+    intensity, intensity_source = reading.intensity, analysis.reading_source
+    if intensity is None and future.now_rate is not None:
+        intensity, intensity_source = future.now_rate, "forecast"
+    raining, nearby_source = nearby.raining, analysis.nearby_source
+    if raining is None and future.now_likely is not None:
+        raining, nearby_source = future.now_likely, "forecast"
+    next_hour, next_hour_source = None, None
+    if nowcast.status in NOWCAST_CONFIDENT and nowcast.next_hour_max is not None:
+        next_hour, next_hour_source = nowcast.next_hour_max, "radar"
+    elif future.hour_max_rate is not None:
+        next_hour, next_hour_source = future.hour_max_rate, "forecast"
+    if nowcast.arrival is not None:
+        arrival, arrival_source = nowcast.arrival, "radar"
+    elif future.arrival is not None:
+        arrival, arrival_source = future.arrival, "forecast"
+    else:
+        arrival, arrival_source = None, None
+    radar_nearby = nearby_source != "forecast"
+    return Location(
+        intensity=None if intensity is None else round(intensity, 2),
+        intensity_source=intensity_source if intensity is not None else None,
+        reflectivity=reading.reflectivity,
+        raining_nearby=raining,
+        nearby_max=nearby.max_intensity if radar_nearby else None,
+        nearest_km=nearby.nearest_km if radar_nearby else None,
+        nearest_bearing=nearby.nearest_bearing if radar_nearby else None,
+        nearest_direction=nearby.nearest_direction if radar_nearby else None,
+        nearby_source=nearby_source if raining is not None else None,
+        next_hour_max=next_hour,
+        next_hour_source=next_hour_source,
+        arrival=arrival,
+        arrival_source=arrival_source,
+    )

@@ -1,4 +1,9 @@
-"""Sensor platform for SMHI Weather Radar."""
+"""Sensor platform for SMHI Weather Radar.
+
+Location values come from data.location, which already combines the radar
+(measured, or traced into a radar gap) with the SMHI forecast where the
+radar cannot see. Each such sensor has a "source" attribute.
+"""
 
 from __future__ import annotations
 
@@ -31,50 +36,36 @@ from . import SmhiRadarConfigEntry
 from .analysis import COMPASS
 from .const import PRECIPITATION_TYPES, TYPE_NONE
 from .coordinator import SmhiRadarCoordinator
+from .coverage import STATES as COVERAGE_STATES
 from .entity import SmhiRadarEntity
 from .ibw import LEVELS as WARNING_LEVELS, highest_level
 from .models import RadarData
 
 PARALLEL_UPDATES = 0
 
-_NOWCAST_USABLE = ("ok", "no_rain")
-
-
-def _round(value: float | None, digits: int = 2) -> float | None:
-    return None if value is None else round(value, digits)
-
-
-def _arrival(data: RadarData) -> tuple[datetime | None, str | None]:
-    """Radar first; the forecast once the radar sees nothing within its hour."""
-    if data.measured and data.analysis.nowcast.arrival is not None:
-        return data.analysis.nowcast.arrival, "radar"
-    if data.outlook.arrival is not None:
-        return data.outlook.arrival, "forecast"
-    return None, None
-
-
-def _minutes_until(data: RadarData) -> int | None:
-    arrival, _ = _arrival(data)
-    if arrival is None:
-        return None
-    return max(0, math.ceil((arrival - dt_util.utcnow()).total_seconds() / 60))
-
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
-def _nowcast_attributes(data: RadarData) -> dict[str, Any]:
-    nowcast = data.analysis.nowcast
-    arrival, source = _arrival(data)
-    forecast = source == "forecast"
+def _minutes_until(data: RadarData) -> int | None:
+    arrival = data.location.arrival
+    if arrival is None:
+        return None
+    return max(0, math.ceil((arrival - dt_util.utcnow()).total_seconds() / 60))
+
+
+def _arrival_attributes(data: RadarData) -> dict[str, Any]:
+    nowcast, location = data.analysis.nowcast, data.location
+    forecast = location.arrival_source == "forecast"
     return {
-        "status": nowcast.status if data.measured else "no_coverage",
-        "source": source,
-        "arrival": _iso(arrival),
+        "source": location.arrival_source,
+        "arrival": _iso(location.arrival),
+        "status": nowcast.status,
+        "radar_time": _iso(nowcast.valid),
+        "radar_horizon_minutes": nowcast.horizon,
         "forecast_probability": data.outlook.arrival_probability if forecast else None,
         "forecast_amount": data.outlook.arrival_amount if forecast else None,
-        "radar_time": nowcast.valid.isoformat() if nowcast.valid else None,
         "motion_pairs": nowcast.pairs_used,
         "motion_speed_kmh": nowcast.speed_kmh,
         "motion_heading": nowcast.heading,
@@ -101,16 +92,32 @@ def _warning_attributes(data: RadarData, language: str) -> dict[str, Any]:
     }
 
 
+def _coverage_attributes(data: RadarData) -> dict[str, Any] | None:
+    coverage = data.coverage
+    if coverage is None:
+        return None
+    return {
+        "offline_radars": coverage.offline,
+        "radars": [
+            {
+                "name": radar.name,
+                "distance_km": radar.distance_km,
+                "online": radar.online,
+                "last_data": _iso(radar.updated),
+            }
+            for radar in coverage.radars
+        ],
+    }
+
+
 @dataclass(frozen=True, kw_only=True)
 class SmhiRadarSensorDescription(SensorEntityDescription):
     """Describes an SMHI radar sensor."""
 
     value_fn: Callable[[RadarData], float | int | str | datetime | None]
-    attributes_fn: Callable[..., dict[str, Any]] | None = None
+    attributes_fn: Callable[..., dict[str, Any] | None] | None = None
     # Recomputed every minute between radar frames (countdowns).
     live: bool = False
-    # Reads the radar at the location: unknown while no working radar covers it.
-    radar_reading: bool = False
     # attributes_fn takes the Home Assistant language as a second argument.
     language_attributes: bool = False
 
@@ -118,23 +125,22 @@ class SmhiRadarSensorDescription(SensorEntityDescription):
 SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
     SmhiRadarSensorDescription(
         key="precipitation_intensity",
-        radar_reading=True,
         translation_key="precipitation_intensity",
         device_class=SensorDeviceClass.PRECIPITATION_INTENSITY,
         native_unit_of_measurement=UnitOfVolumetricFlux.MILLIMETERS_PER_HOUR,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        value_fn=lambda data: _round(data.analysis.reading.intensity),
+        value_fn=lambda data: data.location.intensity,
+        attributes_fn=lambda data: {"source": data.location.intensity_source},
     ),
     SmhiRadarSensorDescription(
         key="reflectivity",
-        radar_reading=True,
         translation_key="reflectivity",
         native_unit_of_measurement="dBZ",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        value_fn=lambda data: data.analysis.reading.reflectivity,
+        value_fn=lambda data: data.location.reflectivity,
     ),
     SmhiRadarSensorDescription(
         key="observation_time",
@@ -145,32 +151,30 @@ SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
     ),
     SmhiRadarSensorDescription(
         key="nearby_max_intensity",
-        radar_reading=True,
         translation_key="nearby_max_intensity",
         device_class=SensorDeviceClass.PRECIPITATION_INTENSITY,
         native_unit_of_measurement=UnitOfVolumetricFlux.MILLIMETERS_PER_HOUR,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        value_fn=lambda data: _round(data.analysis.nearby.max_intensity),
+        value_fn=lambda data: None if data.location.nearby_max is None else round(data.location.nearby_max, 2),
+        attributes_fn=lambda data: {"source": data.location.nearby_source if data.location.nearby_max is not None else None},
     ),
     SmhiRadarSensorDescription(
         key="nearest_precipitation_distance",
-        radar_reading=True,
         translation_key="nearest_precipitation_distance",
         device_class=SensorDeviceClass.DISTANCE,
         native_unit_of_measurement=UnitOfLength.KILOMETERS,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
-        value_fn=lambda data: data.analysis.nearby.nearest_km,
+        value_fn=lambda data: data.location.nearest_km,
     ),
     SmhiRadarSensorDescription(
         key="nearest_precipitation_direction",
-        radar_reading=True,
         translation_key="nearest_precipitation_direction",
         device_class=SensorDeviceClass.ENUM,
         options=list(COMPASS),
-        value_fn=lambda data: data.analysis.nearby.nearest_direction,
-        attributes_fn=lambda data: {"bearing": data.analysis.nearby.nearest_bearing},
+        value_fn=lambda data: data.location.nearest_direction,
+        attributes_fn=lambda data: {"bearing": data.location.nearest_bearing},
     ),
     SmhiRadarSensorDescription(
         key="precipitation_type",
@@ -189,23 +193,21 @@ SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.MINUTES,
         value_fn=_minutes_until,
-        attributes_fn=_nowcast_attributes,
+        attributes_fn=_arrival_attributes,
         live=True,
     ),
     SmhiRadarSensorDescription(
         key="precipitation_next_hour",
-        radar_reading=True,
         translation_key="precipitation_next_hour",
         device_class=SensorDeviceClass.PRECIPITATION_INTENSITY,
         native_unit_of_measurement=UnitOfVolumetricFlux.MILLIMETERS_PER_HOUR,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        value_fn=lambda data: (
-            data.analysis.nowcast.next_hour_max
-            if data.analysis.nowcast.status in _NOWCAST_USABLE
-            else None
-        ),
-        attributes_fn=lambda data: {"status": data.analysis.nowcast.status},
+        value_fn=lambda data: data.location.next_hour_max,
+        attributes_fn=lambda data: {
+            "source": data.location.next_hour_source,
+            "status": data.analysis.nowcast.status,
+        },
     ),
     SmhiRadarSensorDescription(
         key="thunder_probability",
@@ -240,6 +242,14 @@ SENSORS: tuple[SmhiRadarSensorDescription, ...] = (
         value_fn=lambda data: None if data.warnings is None else highest_level(list(data.warnings)),
         attributes_fn=_warning_attributes,
         language_attributes=True,
+    ),
+    SmhiRadarSensorDescription(
+        key="radar_coverage",
+        translation_key="radar_coverage",
+        device_class=SensorDeviceClass.ENUM,
+        options=list(COVERAGE_STATES),
+        value_fn=lambda data: None if data.coverage is None else data.coverage.state,
+        attributes_fn=_coverage_attributes,
     ),
 )
 
@@ -282,10 +292,7 @@ class SmhiRadarSensor(SmhiRadarEntity, SensorEntity):
     @property
     def native_value(self) -> float | int | str | datetime | None:
         """Return the sensor value."""
-        data = self.coordinator.data
-        if self.entity_description.radar_reading and not data.measured:
-            return None
-        return self.entity_description.value_fn(data)
+        return self.entity_description.value_fn(self.coordinator.data)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:

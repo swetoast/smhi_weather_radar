@@ -56,7 +56,10 @@ async def test_setup_history_and_sensors(hass: HomeAssistant, smhi_api) -> None:
     warning = hass.states.get(f"sensor.{PREFIX}_weather_warning")
     assert warning.state == "yellow"
     assert [w["event"] for w in warning.attributes["warnings"]] == ["rain"]
-    assert state(hass, "binary_sensor.radar_coverage") == "on"
+    coverage = hass.states.get(f"sensor.{PREFIX}_radar_coverage")
+    assert coverage.state == "full"
+    assert len(coverage.attributes["radars"]) == 12 and coverage.attributes["offline_radars"] == []
+    assert hass.states.get(f"sensor.{PREFIX}_precipitation_intensity").attributes["source"] == "measured"
 
     for entity in ("image.weather_radar", "image.local_weather_radar"):
         image = await async_get_image(hass, f"image.{PREFIX}_{entity.split('.')[1]}")
@@ -221,20 +224,23 @@ async def test_offline_radar_is_not_dry_weather(hass: HomeAssistant, smhi_api) -
     smhi_api.get(RADAR_STATUS_URL, json=radar_status({"vara": "2026-10-22T08:09:56Z"}))
     for valid in frame_times():
         smhi_api.get(frame_url(f"radar_{valid:%y%m%d%H%M}", valid), content=cell_frame(valid))
-    await _setup(hass)
+    entry = await _setup(hass)
 
-    coverage = hass.states.get(f"binary_sensor.{PREFIX}_radar_coverage")
-    assert coverage.state == "off"
+    coverage = hass.states.get(f"sensor.{PREFIX}_radar_coverage")
+    assert coverage.state == "gap"
     assert coverage.attributes["offline_radars"] == ["Vara"]
-    for entity in (
-        "sensor.precipitation_intensity", "sensor.nearest_precipitation_distance",
-        "sensor.highest_intensity_next_hour", "sensor.precipitation_type",
-        "binary_sensor.precipitation_nearby",
-    ):
-        assert state(hass, entity) == "unknown", entity
+    assert coverage.attributes["radars"][0]["name"] == "Vara"
+
+    # No radar sees Boras and the rain comes from inside the gap: the forecast answers, labelled as such.
+    intensity = hass.states.get(f"sensor.{PREFIX}_precipitation_intensity")
+    assert (intensity.state, intensity.attributes["source"]) == ("0.4", "forecast")
+    nearby = hass.states.get(f"binary_sensor.{PREFIX}_precipitation_nearby")
+    assert (nearby.state, nearby.attributes["source"]) == ("on", "forecast")
+    assert state(hass, "sensor.nearest_precipitation_distance") == "unknown"  # no spatial guesses
+    assert entry.runtime_data.data.location.reflectivity is None  # never invented
+    assert state(hass, "sensor.precipitation_type") == "rain_and_snow"
     expected = hass.states.get(f"sensor.{PREFIX}_precipitation_expected_in")
-    assert expected.attributes["status"] == "no_coverage"
     assert expected.attributes["source"] == "forecast"
-    assert expected.state == "0"  # the forecast has precipitation in the current hour
+    assert expected.state == "0"
     for entity in ("image.weather_radar", "image.local_weather_radar"):
         assert hass.states.get(f"image.{PREFIX}_{entity.split('.')[1]}") is not None

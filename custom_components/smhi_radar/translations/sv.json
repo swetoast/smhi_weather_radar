@@ -135,6 +135,14 @@
           "orange": "Orange",
           "red": "Röd"
         }
+      },
+      "radar_coverage": {
+        "name": "Radartäckning",
+        "state": {
+          "full": "Full",
+          "filled": "Ifylld av grannradar",
+          "gap": "Lucka"
+        }
       }
     },
     "binary_sensor": {
@@ -143,13 +151,6 @@
       },
       "precipitation_nearby": {
         "name": "Nederbörd i närheten"
-      },
-      "radar_coverage": {
-        "name": "Radartäckning",
-        "state": {
-          "on": "Täckt",
-          "off": "Inte täckt"
-        }
       }
     }
   }

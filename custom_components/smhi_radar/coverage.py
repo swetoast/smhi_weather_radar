@@ -15,12 +15,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 import math
 from typing import Any, Final
 
+import numpy as np
+
+from .const import SWEREF_MAX_EASTING, SWEREF_MAX_NORTHING, SWEREF_MIN_EASTING, SWEREF_MIN_NORTHING
 from .exceptions import SmhiRadarDataError
 from .projection import to_sweref99tm
 
+STATES: Final = ("full", "filled", "gap")
 FILL_IN_KM: Final = 140.0
 OFFLINE_AFTER: Final = timedelta(minutes=30)
 
@@ -55,14 +60,23 @@ class RadarSite:
 
 @dataclass(frozen=True, slots=True)
 class Coverage:
-    """Whether the location is measured right now."""
+    """Whether the location is measured right now.
 
-    covered: bool
-    radars: tuple[RadarSite, ...]  # nearest first, within reach
+    state: "full" (the nearest radar delivers), "filled" (it does not, but a
+    neighbour reaches the location) or "gap" (no working radar reaches it).
+    """
+
+    state: str
+    radars: tuple[RadarSite, ...]  # every radar, nearest first
+
+    @property
+    def covered(self) -> bool:
+        """Return True when a working radar measures the location."""
+        return self.state != "gap"
 
     @property
     def offline(self) -> list[str]:
-        """Return names of nearby radars that are not delivering."""
+        """Return names of all radars that are not delivering."""
         return [radar.name for radar in self.radars if not radar.online]
 
 
@@ -99,7 +113,42 @@ def coverage(status: dict[str, datetime], latitude: float, longitude: float, now
             )
         )
     radars.sort(key=lambda radar: radar.distance_km)
-    nearest = radars[0]
-    covered = nearest.online or any(r.online and r.distance_km <= FILL_IN_KM for r in radars)
-    reach = max(FILL_IN_KM, nearest.distance_km)
-    return Coverage(covered, tuple(r for r in radars if r.distance_km <= reach))
+    if radars[0].online:
+        state = "full"
+    elif any(r.online and r.distance_km <= FILL_IN_KM for r in radars):
+        state = "filled"
+    else:
+        state = "gap"
+    return Coverage(state, tuple(radars))
+
+
+def online_radars(status: dict[str, datetime], now: datetime) -> frozenset[str]:
+    """Return the keys of radars that delivered data recently."""
+    return frozenset(key for key, updated in status.items() if key in SITES and now - updated <= OFFLINE_AFTER)
+
+
+@lru_cache(maxsize=8)
+def coverage_grid(width: int, height: int, online: frozenset[str]) -> np.ndarray:
+    """Return a bool grid of composite pixels a working radar measures.
+
+    Same rule as for the location: the nearest radar delivers, or another
+    delivering radar is within FILL_IN_KM.
+    """
+    pixel_e = (SWEREF_MAX_EASTING - SWEREF_MIN_EASTING) / width
+    pixel_n = (SWEREF_MAX_NORTHING - SWEREF_MIN_NORTHING) / height
+    easting = SWEREF_MIN_EASTING + (np.arange(width, dtype=np.float32) + 0.5) * pixel_e
+    northing = SWEREF_MAX_NORTHING - (np.arange(height, dtype=np.float32) + 0.5) * pixel_n
+    nearest = np.full((height, width), np.inf, np.float32)
+    nearest_online = np.zeros((height, width), bool)
+    filled = np.zeros((height, width), bool)
+    for key, (_, lat, lon) in SITES.items():
+        site_e, site_n = to_sweref99tm(lat, lon)
+        distance = np.hypot(easting[None, :] - site_e, northing[:, None] - site_n) / 1000
+        closer = distance < nearest
+        nearest = np.where(closer, distance, nearest)
+        nearest_online = np.where(closer, key in online, nearest_online)
+        if key in online:
+            filled |= distance <= FILL_IN_KM
+    grid = nearest_online | filled
+    grid.flags.writeable = False
+    return grid

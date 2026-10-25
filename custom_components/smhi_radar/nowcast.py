@@ -14,6 +14,11 @@ pixel is about 2 km, so a shower passing just beside the house was missed).
 The arrival is an absolute time, so sensors can count down between radar
 frames and allow for the age of the newest frame.
 
+Radar gaps: pixels no working radar measures (see coverage) are unknown,
+not dry. Where the motion is known, a gap pixel takes the value its rain
+had when it was last upstream over covered ground, up to MAX_FILL_AGE
+minutes back. Trajectories that run into unknown ground stop there.
+
 Small spots that are wet in nearly every frame are treated as static
 clutter and ignored. When the motion is not trustworthy the status is
 "uncertain", but rain already at the location is still reported (0).
@@ -41,6 +46,7 @@ WHITENING: Final = 0.8  # 1.0 is classic phase correlation, 0 is plain correlati
 REMOVE_STATIC: Final = True  # subtract the hour's mean field: clutter and ground echoes stop pinning motion to zero
 PAIR_LAGS: Final = (10, 15, 20, 25, 30)  # minutes
 PAIR_SPAN: Final = 30  # only frames this recent are paired
+MAX_FILL_AGE: Final = 30  # minutes; simulated accuracy of gap filling falls below 85 % after this
 MIN_AGREEING: Final = 3
 AGREE_PX_PER_MIN: Final = 0.08  # about 10 km/h at 2 km pixels
 AGREE_SHARE: Final = 0.3  # or this share of the speed
@@ -57,6 +63,21 @@ class Motion:
     dx: float
     dy: float
     peak: float
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class LocalField:
+    """Rain rates around the location for the newest frame.
+
+    values is NaN where no radar measured and nothing could be traced in;
+    filled marks pixels traced in from older frames. x0, y0 place the
+    window in the composite grid.
+    """
+
+    values: np.ndarray
+    filled: np.ndarray
+    x0: int
+    y0: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +98,9 @@ class Nowcast:
     heading: float | None = None
     heading_direction: str | None = None
     pairs_used: int | None = None
-    forecast: list[dict[str, float | int]] = field(default_factory=list)
+    forecast: list[dict[str, float | int | None]] = field(default_factory=list)
+    horizon: int | None = None  # minutes the trajectory could be followed before a radar gap
+    local: LocalField | None = field(default=None, compare=False, repr=False)
 
     @property
     def arrival(self) -> datetime | None:
@@ -209,14 +232,56 @@ def _disc(radius_px: float) -> tuple[np.ndarray, np.ndarray]:
     return ox[inside], oy[inside]
 
 
-def _near(field: np.ndarray, x: float, y: float, disc: tuple[np.ndarray, np.ndarray]) -> float:
-    """Return the highest value within the disc around (x, y)."""
+def _near(field: np.ndarray, x: float, y: float, disc: tuple[np.ndarray, np.ndarray]) -> float | None:
+    """Return the highest value within the disc around (x, y).
+
+    NaN marks pixels no radar measured. Precipitation anywhere in the disc
+    counts; otherwise the answer is only "dry" when the whole disc is known.
+    """
     xs = np.floor(x).astype(int) + disc[0]
     ys = np.floor(y).astype(int) + disc[1]
     inside = (xs >= 0) & (xs < WINDOW) & (ys >= 0) & (ys < WINDOW)
     if not inside.any():
         return 0.0
-    return float(field[ys[inside], xs[inside]].max())
+    values = field[ys[inside], xs[inside]]
+    known = values[~np.isnan(values)]
+    if known.size and known.max() > 0:
+        return float(known.max())
+    if known.size < values.size:
+        return None
+    return 0.0
+
+
+def fill_gap(
+    fields: dict[datetime, np.ndarray],
+    covered: np.ndarray,
+    newest: datetime,
+    motion: Motion | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the newest field with gap pixels filled, and where filling happened.
+
+    A gap pixel takes the value its rain had at the most recent time it was
+    upstream over covered ground, at most MAX_FILL_AGE minutes ago. What
+    cannot be traced stays NaN (unknown).
+    """
+    values = np.where(covered, fields[newest], np.nan).astype(np.float32)
+    filled = np.zeros(covered.shape, bool)
+    if motion is None or covered.all():
+        return values, filled
+    ys, xs = np.nonzero(~covered)
+    for moment in sorted(fields, reverse=True):
+        age = (newest - moment).total_seconds() / 60
+        if age <= 0 or age > MAX_FILL_AGE or xs.size == 0:
+            continue
+        sx = np.floor(xs + 0.5 - motion.dx * age).astype(int)
+        sy = np.floor(ys + 0.5 - motion.dy * age).astype(int)
+        inside = (sx >= 0) & (sx < WINDOW) & (sy >= 0) & (sy < WINDOW)
+        found = np.zeros(xs.size, bool)
+        found[inside] = covered[sy[inside], sx[inside]]
+        values[ys[found], xs[found]] = fields[moment][sy[found], sx[found]]
+        filled[ys[found], xs[found]] = True
+        xs, ys = xs[~found], ys[~found]
+    return values, filled
 
 
 def nowcast(
@@ -224,11 +289,13 @@ def nowcast(
     home_x: float,
     home_y: float,
     pixel_km: float,
+    covered: np.ndarray | None = None,
 ) -> Nowcast:
     """Return a nowcast from dBZ grids (int8, see analysis) keyed by time.
 
     home_x and home_y are fractional pixel coordinates of the location and
-    pixel_km is the pixel size. Only a window around the location is used.
+    pixel_km is the pixel size. covered marks composite pixels a working
+    radar measures (all when None). Only a window around the location is used.
     """
     if not frames:
         return Nowcast("insufficient_history")
@@ -238,6 +305,11 @@ def nowcast(
     half = WINDOW // 2
     wx, wy = home_x - (cx - half), home_y - (cy - half)
     disc = _disc(max(1.0, ARRIVAL_RADIUS_KM / pixel_km))
+    window_covered = (
+        np.ones((WINDOW, WINDOW), bool)
+        if covered is None
+        else crop(covered.astype(np.int8), cx, cy, 1).astype(bool)
+    )
 
     clean = {
         t: np.nan_to_num(rain_rate_grid(crop(frames[t], cx, cy, NO_DATA)), nan=0.0)
@@ -247,15 +319,23 @@ def nowcast(
     if clutter is not None:
         clean = {t: np.where(clutter, 0.0, grid).astype(np.float32) for t, grid in clean.items()}
     current = clean[newest]
-    raining_now = _near(current, wx, wy, disc) > 0
 
-    if np.count_nonzero(current) == 0:
+    def result(status: str, motion: Motion | None = None, **kwargs) -> Nowcast:
+        values, filled = fill_gap(clean, window_covered, newest, motion)
+        local = LocalField(values, filled, cx - half, cy - half)
+        if motion is None:
+            now = _near(values, wx, wy, disc)
+            return Nowcast(status, valid=newest, expected_in=0 if now else None, local=local, **kwargs)
+        return _extrapolate(status, newest, motion, values, wx, wy, disc, pixel_km, local, **kwargs)
+
+    if np.count_nonzero(current) == 0 and window_covered.all():
         # Nothing within about 160 km in any direction.
         return Nowcast(
             "no_rain",
             valid=newest,
             next_hour_max=0.0,
             forecast=[{"minutes": m, "intensity": 0.0} for m in range(0, LEAD_MAX + 1, FORECAST_STEP)],
+            local=LocalField(np.where(window_covered, current, np.nan), np.zeros_like(window_covered), cx - half, cy - half),
         )
 
     recent = [t for t in times if newest - t <= timedelta(minutes=PAIR_SPAN)]
@@ -272,35 +352,54 @@ def nowcast(
                 estimates.append((Motion(shift.dx / lag, shift.dy / lag, shift.peak), lag))
 
     possible = sum(newer - timedelta(minutes=lag) in spectra for newer in recent for lag in PAIR_LAGS)
-    paired = possible >= MIN_AGREEING
     combined = combine(estimates) if estimates else None
     speed_kmh = math.hypot(combined[0].dx, combined[0].dy) * pixel_km * 60 if combined else None
     if combined is None or speed_kmh is None or speed_kmh > MAX_SPEED_KMH:
-        return Nowcast(
-            "uncertain" if paired else "insufficient_history",
-            valid=newest,
-            expected_in=0 if raining_now else None,
-            pairs_used=0,
-        )
+        return result("uncertain" if possible >= MIN_AGREEING else "insufficient_history", pairs_used=0)
     motion, used = combined
+    return result("ok", motion, pairs_used=used)
 
-    intensities = []
+
+def _extrapolate(
+    status: str,
+    newest: datetime,
+    motion: Motion,
+    values: np.ndarray,
+    wx: float,
+    wy: float,
+    disc: tuple[np.ndarray, np.ndarray],
+    pixel_km: float,
+    local: LocalField,
+    **kwargs,
+) -> Nowcast:
+    """Move the (gap filled) field along the motion over the location."""
+    intensities: list[float | None] = []
+    expected_in = None
     for minutes in range(LEAD_MAX + 1):
         # Semi-Lagrangian: the rain arriving now was upstream minutes ago.
-        intensities.append(_near(current, wx - motion.dx * minutes, wy - motion.dy * minutes, disc))
-    expected_in = next((m for m, value in enumerate(intensities) if value > 0), None)
+        value = _near(values, wx - motion.dx * minutes, wy - motion.dy * minutes, disc)
+        intensities.append(value)
+        if value is None:
+            break  # the trajectory runs into ground no radar can see
+        if value > 0 and expected_in is None:
+            expected_in = minutes
+    resolved = [value for value in intensities if value is not None]
+    complete = len(resolved) == LEAD_MAX + 1
+    peak = max(resolved, default=0.0)
     heading = math.degrees(math.atan2(motion.dx, -motion.dy)) % 360
     return Nowcast(
-        "ok",
+        status,
         valid=newest,
         expected_in=expected_in,
-        next_hour_max=round(max(intensities), 2),
-        speed_kmh=round(speed_kmh, 1),
+        next_hour_max=round(peak, 2) if complete or peak > 0 else None,
+        speed_kmh=round(math.hypot(motion.dx, motion.dy) * pixel_km * 60, 1),
         heading=round(heading),
         heading_direction=compass_point(heading),
-        pairs_used=used,
         forecast=[
-            {"minutes": m, "intensity": round(intensities[m], 2)}
+            {"minutes": m, "intensity": None if m >= len(intensities) or intensities[m] is None else round(intensities[m], 2)}
             for m in range(0, LEAD_MAX + 1, FORECAST_STEP)
         ],
+        horizon=len(resolved) - 1,
+        local=local,
+        **kwargs,
     )

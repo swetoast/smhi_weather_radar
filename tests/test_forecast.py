@@ -78,26 +78,43 @@ def test_outlook_thunder_amounts_and_arrival_beyond_radar() -> None:
     assert outlook([], NOW, after=NOW).amount is None
 
 
-def test_expected_in_hands_over_to_forecast(freezer) -> None:
-    """With no radar arrival the sensor counts down to the forecast step instead."""
-    from types import SimpleNamespace
-
+def test_location_prefers_radar_then_gap_fill_then_forecast() -> None:
+    """Radar values win; traced gap values keep their source; the forecast fills the rest."""
+    from custom_components.smhi_radar.analysis import NearbyRain, PointReading
+    from custom_components.smhi_radar.coordinator import _location
     from custom_components.smhi_radar.forecast import Outlook
+    from custom_components.smhi_radar.models import Analysis
     from custom_components.smhi_radar.nowcast import Nowcast
-    from custom_components.smhi_radar.sensor import _minutes_until, _nowcast_attributes
 
-    freezer.move_to(NOW)
     later = NOW + timedelta(hours=3)
-    data = SimpleNamespace(
-        analysis=SimpleNamespace(nowcast=Nowcast("no_rain", valid=NOW)),
-        outlook=Outlook(arrival=later, arrival_probability=80, arrival_amount=1.2),
-        expected_type="rain",
-        measured=True,
-    )
-    assert _minutes_until(data) == 180
-    attributes = _nowcast_attributes(data)
-    assert (attributes["source"], attributes["forecast_probability"]) == ("forecast", 80)
+    future = Outlook(arrival=later, arrival_probability=80, now_rate=0.6, now_likely=True, hour_max_rate=1.2)
+    nearby = NearbyRain(False, 0.0, 12.0, 90.0, "e")
 
-    data.analysis.nowcast = Nowcast("ok", valid=NOW, expected_in=12)
-    assert _minutes_until(data) == 12
-    assert _nowcast_attributes(data)["source"] == "radar"
+    measured = Analysis(PointReading(25, 1.3, 1, 1), nearby, Nowcast("ok", valid=NOW, expected_in=12, next_hour_max=2.0))
+    location = _location(measured, future)
+    assert (location.intensity, location.intensity_source) == (1.3, "measured")
+    assert (location.arrival, location.arrival_source) == (NOW + timedelta(minutes=12), "radar")
+    assert (location.next_hour_max, location.next_hour_source) == (2.0, "radar")
+    assert (location.nearest_km, location.nearby_source) == (12.0, "measured")
+
+    traced = Analysis(
+        PointReading(None, 0.8, 1, 1), nearby, Nowcast("ok", valid=NOW), reading_source="extrapolated", covered=False
+    )
+    location = _location(traced, future)
+    assert (location.intensity, location.intensity_source) == (0.8, "extrapolated")
+    assert (location.arrival, location.arrival_source) == (later, "forecast")
+
+    blind = Analysis(
+        PointReading(None, None, 1, 1),
+        NearbyRain(None, None, None, None, None),
+        Nowcast("uncertain", valid=NOW),
+        reading_source=None,
+        nearby_source=None,
+        covered=False,
+    )
+    location = _location(blind, future)
+    assert (location.intensity, location.intensity_source) == (0.6, "forecast")
+    assert (location.raining_nearby, location.nearby_source) == (True, "forecast")
+    assert location.nearest_km is None and location.nearby_max is None  # no spatial guesses
+    assert (location.next_hour_max, location.next_hour_source) == (1.2, "forecast")
+    assert _location(blind, Outlook()).intensity is None

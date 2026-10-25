@@ -17,7 +17,7 @@ Home Assistant integration for the SMHI Sweden composite weather radar. It shows
 - Precipitation type (rain, snow, sleet and more) from the SMHI point forecast, applied when the radar sees precipitation
 - Thunder probability and expected precipitation for the next 24 hours from the same forecast
 - SMHI weather warnings for rain, snow and thunder that cover your location
-- Radar coverage check: when the radar covering your location is offline, readings become unknown instead of looking dry
+- Radar coverage: when a radar is out of service its area no longer reads as dry. Rain is traced into the gap from the last radar images where possible, the forecast covers the rest, and every location sensor says where its value came from
 - Diagnostics download
 
 ## Requirements
@@ -70,7 +70,7 @@ Setup uses your Home Assistant location and needs no input. Everything else is u
 | Highest intensity next hour | Highest mm/h expected within 3 km of the location in the next hour. |
 | Precipitation type | What is falling now, from the SMHI forecast when the radar sees precipitation. |
 | Radar data current | On while the newest frame is younger than the freshness threshold. |
-| Radar coverage | On while a working radar measures the location. See [Radar coverage](#radar-coverage). |
+| Radar coverage | `full` (the nearest radar works), `filled` (it does not, but a neighbouring radar reaches the location) or `gap` (no working radar reaches it). See [Radar coverage](#radar-coverage). |
 | Thunder probability | Forecast thunderstorm probability for the current hour, in percent. |
 | Precipitation next 24 hours | Expected precipitation in mm over the next 24 hours (forecast ensemble mean). |
 | Weather warning | Highest SMHI warning level for rain, snow or thunder covering the location: `none`, `message`, `yellow`, `orange` or `red`. |
@@ -79,8 +79,9 @@ Setup uses your Home Assistant location and needs no input. Everything else is u
 
 | Attribute | Description |
 | --- | --- |
-| `status` | Radar nowcast: `ok`, `no_rain` (no precipitation within about 160 km), `uncertain` (precipitation around but its movement is unclear), `insufficient_history`, or `no_coverage` (no working radar measures the location). |
 | `source` | `radar` or `forecast`: where the arrival comes from. |
+| `status` | Radar nowcast: `ok`, `no_rain` (no precipitation within about 160 km), `uncertain` (precipitation around but its movement is unclear) or `insufficient_history`. |
+| `radar_horizon_minutes` | How far ahead the radar could follow the precipitation before running into a radar gap (60 without gaps). |
 | `arrival` | Expected arrival time. |
 | `forecast_probability`, `forecast_amount` | Probability (%) and expected mm of the forecast step, when the source is the forecast. |
 | `radar_time` | Time of the radar frame the estimate is based on. |
@@ -97,7 +98,8 @@ The other new sensors have these attributes:
 | --- | --- |
 | Thunder probability | `max_next_6h`, `max_next_6h_at`: highest probability in the next 6 hours and when. |
 | Precipitation next 24 hours | `min`, `max`: the forecast range in mm. `max_probability`: highest chance of precipitation in the period. |
-| Radar coverage | `offline_radars`: radars within reach that are not delivering. `radars`: each radar within reach with `name`, `distance_km`, `online` and `last_data`. |
+| Radar coverage | `offline_radars`: radars that are not delivering. `radars`: all SMHI radars, nearest first, with `name`, `distance_km`, `online` and `last_data`. |
+| Precipitation intensity, Highest intensity nearby, Highest intensity next hour, Precipitation nearby | `source`: where the value came from, see below. |
 | Weather warning | `warnings`: each warning with `event`, `level`, `description` (in the Home Assistant language), `area`, `start` and `end`. |
 
 ## How the nowcast works
@@ -114,15 +116,20 @@ When the radar sees nothing arriving within its hour, or cannot tell how the pre
 
 SMHI's composite image is transparent both where a radar sees no precipitation and where no radar is measuring at all. When a radar is out of service its area therefore looks dry, with a straight or slightly curved edge where the neighbouring radars stop reaching.
 
-The integration reads when each radar last delivered data (every 10 minutes) and works out whether the location is measured: the nearest radar must be delivering, or another delivering radar must be within about 140 km. Beyond that distance a radar's lowest beam passes over low, steady rain, so the composite cannot be trusted there.
+The integration reads when each radar last delivered data (every 10 minutes). A pixel counts as measured when its nearest radar delivers, or another delivering radar is within about 140 km; beyond that a radar's lowest beam passes over low, steady rain. Unmeasured pixels are treated as unknown, never as dry.
 
-While the location is not covered:
+Values at the location then come from the best source available, shown in each sensor's `source` attribute:
 
-- Precipitation intensity, reflectivity, the nearby sensors, the highest intensity next hour and the precipitation type are unknown.
-- Precipitation expected in uses the SMHI forecast, with `status` set to `no_coverage`.
-- The maps still show the composite as SMHI publishes it.
+| Source | Meaning |
+| --- | --- |
+| `measured` | A working radar measures it. |
+| `extrapolated` | Inside a gap: precipitation seen at the edge of the gap within the last 30 minutes, moved in along the measured motion. |
+| `forecast` | Neither is possible: the SMHI point forecast for the current hour. Less precise, and it cannot tell where nearby precipitation is, so the nearest precipitation sensors stay unknown. |
+| `radar` | Used by Precipitation expected in and Highest intensity next hour: the radar nowcast, including traced gap pixels. |
 
-Radar coverage turns off and `offline_radars` names the radar.
+Reflectivity is only ever measured. The maps show the composite exactly as SMHI publishes it.
+
+These choices come from simulations of a real outage (the Vara radar, October 2026) over 100 synthetic hours of moving, growing and decaying rain. Treating the gap as dry missed every case where it rained at the location. Tracing rain into the gap was right 87 % of the time with 20 minute old observations and 69 % with 60 minute old ones, so it is limited to 30 minutes. Combining tracing with the forecast found the arrival in 49 of 67 cases, against 14 when the gap was ignored.
 
 ## Forecast and warnings
 

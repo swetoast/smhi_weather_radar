@@ -57,6 +57,9 @@ class Outlook:
     arrival: datetime | None = None
     arrival_probability: float | None = None
     arrival_amount: float | None = None
+    now_rate: float | None = None  # mm/h in the current step
+    now_likely: bool | None = None  # precipitation likely in the current step
+    hour_max_rate: float | None = None  # highest mm/h over the next hour
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +199,11 @@ def outlook(steps: list[PrecipitationStep], now: datetime, after: datetime | Non
             return None
         return round(sum(value * share for value, share in values), 1)
 
+    def rate(step: PrecipitationStep) -> float | None:
+        hours = (step.end - step.start).total_seconds() / 3600
+        return None if step.amount is None or hours <= 0 else round(step.amount / hours, 2)
+
+    hour = [s for s in steps if _overlap(s, now, now + timedelta(hours=1)) > 0 and rate(s) is not None]
     arrival_step = None
     if after is not None:
         arrival_step = next((s for s in steps if s.end > after and s.start < end and s.likely_wet), None)
@@ -210,4 +218,7 @@ def outlook(steps: list[PrecipitationStep], now: datetime, after: datetime | Non
         arrival=max(arrival_step.start, after) if arrival_step and after else None,
         arrival_probability=arrival_step.probability if arrival_step else None,
         arrival_amount=arrival_step.amount if arrival_step else None,
+        now_rate=rate(current) if current else None,
+        now_likely=current.likely_wet if current else None,
+        hour_max_rate=max((rate(s) for s in hour), default=None),
     )
